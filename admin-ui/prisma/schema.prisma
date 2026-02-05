@@ -1,0 +1,271 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+enum VoiceAgentEngine {
+  PRIMARY
+  SECONDARY
+}
+
+enum Accent {
+  INDIAN
+  AMERICAN
+  BRITISH
+}
+
+enum Language {
+  ENGLISH
+  HINDI
+}
+
+// Voice names mapped to Indian names (internal Gemini mapping hidden)
+// Ananya=Aoede, Priya=Puck, Chitra=Charon, Kavya=Kore, Farhan=Fenrir
+enum VoiceName {
+  ANANYA
+  PRIYA
+  CHITRA
+  KAVYA
+  FARHAN
+}
+
+// Sentiment analysis result
+enum Sentiment {
+  POSITIVE
+  NEUTRAL
+  NEGATIVE
+}
+
+// Call outcome status
+enum CallOutcome {
+  COMPLETE      // All data points captured
+  PARTIAL       // Some data points captured
+  INCOMPLETE    // No data captured / early drop-off
+  TRANSFERRED   // Successfully transferred to agent
+}
+
+// User roles for access control
+enum UserRole {
+  ADMIN         // Full access to all tabs
+  USER          // Limited access (Overview, Calls, Feedback only)
+}
+
+model VoiceAgent {
+  id            String            @id @default(cuid())
+  name          String
+  slug          String            @unique  // e.g. "spotlight", "tata", "skoda" - used by telephony
+  phoneNumber   String?
+  engine        VoiceAgentEngine  @default(PRIMARY)
+  isActive      Boolean           @default(true)
+  isLive        Boolean           @default(false)  // true = Live, false = Test
+
+  // Key configurable parameters
+  greeting      String            @default("Hello! Welcome. How can I help you today?")
+  accent        Accent            @default(INDIAN)
+  language      Language          @default(HINDI)
+  voiceName     VoiceName         @default(ANANYA)
+  
+  // Full system instructions for the VoiceAgent (used by telephony)
+  systemInstructions  String?     @db.Text
+  
+  // Payload templates (JSON structure for generating payloads from call data)
+  // These define the format of payloads posted after each call
+  siPayloadTemplate     Json?     // SI (Single Interface) webhook payload structure
+  waybeoPayloadTemplate Json?     // Waybeo callback payload structure
+  
+  // Webhook endpoints for post-call payload delivery
+  siCustomerName        String?   // SI customer/account name (e.g., "Kia", "LakmeSalon") - passed in payload
+  siEndpointUrl         String?   // SI webhook URL (e.g., https://testing.myspotlight.co/api/voicebot-lead-save)
+  siAuthHeader          String?   // Authorization header value for SI (e.g., "Bearer xxx")
+  waybeoEndpointUrl     String?   // Waybeo callback URL
+  waybeoAuthHeader      String?   // Authorization header value for Waybeo
+
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  callFlow      CallFlow?
+  guardrails    Guardrail[]
+  voiceProfile  VoiceProfile?
+  sessions      CallSession[]
+  feedback      Feedback[]
+
+  @@index([isActive])
+  @@index([phoneNumber])
+  @@index([slug])
+}
+
+model CallFlow {
+  id            String    @id @default(cuid())
+  voiceAgentId  String    @unique
+  greeting      String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  voiceAgent    VoiceAgent  @relation(fields: [voiceAgentId], references: [id], onDelete: Cascade)
+  steps         CallFlowStep[]
+}
+
+model CallFlowStep {
+  id          String   @id @default(cuid())
+  callFlowId  String
+  order       Int
+  title       String
+  content     String
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  callFlow    CallFlow @relation(fields: [callFlowId], references: [id], onDelete: Cascade)
+
+  @@unique([callFlowId, order])
+  @@index([callFlowId])
+}
+
+model Guardrail {
+  id            String      @id @default(cuid())
+  voiceAgentId  String
+  name          String
+  description   String?
+  ruleText      String
+  enabled       Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  voiceAgent    VoiceAgent  @relation(fields: [voiceAgentId], references: [id], onDelete: Cascade)
+
+  @@index([voiceAgentId])
+  @@index([enabled])
+}
+
+model VoiceProfile {
+  id            String      @id @default(cuid())
+  voiceAgentId  String      @unique
+  voiceName     String
+  accentNotes   String?
+  settingsJson  Json?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  voiceAgent    VoiceAgent  @relation(fields: [voiceAgentId], references: [id], onDelete: Cascade)
+}
+
+model Feedback {
+  id            String      @id @default(cuid())
+  voiceAgentId  String?
+  source        String      @default("testing")
+  message       String
+  createdAt     DateTime    @default(now())
+
+  voiceAgent    VoiceAgent? @relation(fields: [voiceAgentId], references: [id], onDelete: SetNull)
+
+  @@index([voiceAgentId])
+  @@index([createdAt])
+}
+
+model CallSession {
+  id            String            @id @default(cuid())
+  callId        String?           @unique  // External ID from queue processor (e.g., "18882175837982271")
+  voiceAgentId  String?
+  engine        VoiceAgentEngine  @default(PRIMARY)
+  direction     String            @default("inbound")
+  fromNumber    String?
+  toNumber      String?
+  startedAt     DateTime          @default(now())
+  endedAt       DateTime?
+  durationSec   Int?
+  minutesBilled Decimal?          @db.Decimal(10, 2)
+  
+  // Enhanced analytics fields
+  outcome       CallOutcome?      // complete, partial, incomplete, transferred
+  
+  // Transcript and conversation
+  transcript    Json?             // Full conversation array [{timestamp, speaker, text}]
+  
+  // AI-generated analysis
+  summary       String?           @db.Text  // AI-generated call summary
+  sentiment     Sentiment?        // POSITIVE, NEUTRAL, NEGATIVE
+  sentimentScore Decimal?         @db.Decimal(3, 2)  // 0.00 to 1.00
+  
+  // Extracted sales data
+  extractedData Json?             // {full_name, car_model, email_id, test_drive_interest, confidence_scores}
+  
+  // Call analytics
+  analyticsJson Json?             // {total_exchanges, user_messages, assistant_messages, question_answer_pairs}
+  
+  // Raw payload from queue processor
+  payloadJson   Json?             // Complete queue processor result
+  
+  // Legacy meta field
+  metaJson      Json?
+
+  voiceAgent    VoiceAgent?       @relation(fields: [voiceAgentId], references: [id], onDelete: SetNull)
+
+  @@index([voiceAgentId])
+  @@index([startedAt])
+  @@index([engine])
+  @@index([callId])
+  @@index([outcome])
+  @@index([sentiment])
+}
+
+// ---- NextAuth (Prisma Adapter compatible shape) ----
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  username      String?   @unique  // For credentials login
+  passwordHash  String?             // bcrypt hashed password
+  role          UserRole  @default(USER)
+  customerSlug  String?             // Customer branding slug (e.g., "singleinterface", "kia")
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}

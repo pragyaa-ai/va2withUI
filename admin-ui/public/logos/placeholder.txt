@@ -1,0 +1,22 @@
+Logo Placeholder Directory
+==========================
+
+This directory should contain:
+
+1. default.png - Your company/customer logo (recommended: 280x80px)
+2. pragyaa.png - Pragyaa.ai logo for "Powered by" footer (recommended: 200x56px)
+
+For customer deployments:
+- Replace default.png with the customer's logo
+- Or set NEXT_PUBLIC_CUSTOMER_LOGO in .env.local to a custom path
+
+File naming convention for multi-tenant setups:
+- {customerSlug}.png - e.g., acme.png for customerSlug="acme"
+
+Recommended logo formats:
+- PNG with transparent background
+- SVG for scalable graphics
+- Dimensions: 280x80px for header, 200x56px for footer
+
+Note: If logos are missing, the UI will show broken image placeholders.
+Please add your logo files before deploying to production.
