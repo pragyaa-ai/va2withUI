@@ -37,6 +37,7 @@ from audio_processor import AudioProcessor, AudioRates
 from gemini_live import GeminiLiveSession, GeminiSessionConfig
 from data_storage import AgentDataStorage
 from payload_builder import SIPayloadBuilder
+from payload_template_renderer import render_payload_template
 from admin_client import AdminClient
 
 
@@ -379,6 +380,15 @@ async def handle_client(client_ws, path: str):
             pass
 
 
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", ""))
+    except ValueError:
+        return None
+
+
 async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
     """
     Save call data to files, push to Admin UI, and deliver to external webhooks.
@@ -411,16 +421,8 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
         # Fetch agent config for webhook endpoints
         agent_config = admin_client.fetch_agent_config(session.agent)
 
-        # Build SI payload
-        si_payload = payload_builder.build_payload(
-            conversation=session.conversation,
-            start_time=session.start_time,
-            end_time=end_time,
-            duration_sec=duration_sec,
-        )
-
-        # Save files
-        storage.save_transcript(
+        # Save transcript first, then build payload from saved transcript
+        transcript_path = storage.save_transcript(
             call_id=session.ucid,
             conversation=session.conversation,
             metadata={
@@ -430,6 +432,49 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
                 "end_time": end_time.isoformat() + "Z",
             },
         )
+        if not transcript_path:
+            print(f"[{session.ucid}] ❌ Transcript save failed; skipping payload build")
+            return
+
+        transcript_data = storage.load_transcript(transcript_path)
+        if not transcript_data:
+            print(f"[{session.ucid}] ❌ Transcript load failed; skipping payload build")
+            return
+
+        transcript_conversation = transcript_data.get("conversation") or []
+        transcript_metadata = transcript_data.get("metadata") or {}
+        transcript_start = _parse_iso_datetime(transcript_metadata.get("start_time"))
+        transcript_end = _parse_iso_datetime(transcript_metadata.get("end_time"))
+        transcript_duration = transcript_metadata.get("duration_sec") or duration_sec
+
+        response_data = payload_builder.extract_response_data(transcript_conversation)
+        completion_status = payload_builder.determine_completion_status(response_data)
+        extracted_data = payload_builder.build_extracted_map(response_data)
+
+        transcript_text = "\n".join(
+            f"[{entry.get('timestamp')}] {entry.get('speaker', '').upper()}: {entry.get('text', '')}"
+            for entry in transcript_conversation
+        )
+        user_messages = sum(
+            1 for entry in transcript_conversation if entry.get("speaker") == "user"
+        )
+        assistant_messages = sum(
+            1 for entry in transcript_conversation if entry.get("speaker") == "agent"
+        )
+        analytics = {
+            "total_exchanges": len(transcript_conversation),
+            "user_messages": user_messages,
+            "assistant_messages": assistant_messages,
+        }
+
+        # Build Admin UI payload (internal format)
+        si_payload = payload_builder.build_payload(
+            conversation=transcript_conversation,
+            start_time=transcript_start or session.start_time,
+            end_time=transcript_end or end_time,
+            duration_sec=transcript_duration,
+        )
+
         storage.save_si_payload(session.ucid, si_payload)
 
         # Push to Admin UI database
@@ -437,13 +482,48 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
 
         # Deliver to external webhooks if configured
         if agent_config:
+            si_template = agent_config.get("siPayloadTemplate")
+            waybeo_template = agent_config.get("waybeoPayloadTemplate")
+            customer_name = agent_config.get("siCustomerName") or payload_builder.customer_name
+
+            template_context = {
+                "call_id": session.ucid,
+                "agent_slug": session.agent,
+                "agent_name": agent_config.get("name") if agent_config else session.agent,
+                "customer_name": customer_name,
+                "store_code": session.store_code or "",
+                "customer_number": session.customer_number or "",
+                "start_time": (transcript_start or session.start_time or end_time).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+                "end_time": (transcript_end or end_time).strftime("%Y-%m-%d %H:%M:%S"),
+                "duration_sec": transcript_duration,
+                "completion_status": completion_status,
+                "response_data": response_data,
+                "transcript": transcript_conversation,
+                "transcript_text": transcript_text,
+                "extracted": extracted_data,
+                "analytics": analytics,
+            }
+
+            if si_template:
+                rendered_si = render_payload_template(si_template, template_context)
+                if rendered_si.missing_placeholders:
+                    print(
+                        f"[{session.ucid}] ⚠️ SI template missing values for: "
+                        f"{', '.join(rendered_si.missing_placeholders)}"
+                    )
+                si_webhook_payload = rendered_si.payload
+            else:
+                si_webhook_payload = si_payload
+
             # SI webhook
             si_endpoint = agent_config.get("siEndpointUrl")
             si_auth = agent_config.get("siAuthHeader")
             if si_endpoint:
                 print(f"[{session.ucid}] Delivering to SI webhook: {si_endpoint[:50]}...")
                 await admin_client.push_to_si_webhook(
-                    payload=si_payload,
+                    payload=si_webhook_payload,
                     endpoint_url=si_endpoint,
                     auth_header=si_auth,
                     call_id=session.ucid,
@@ -453,17 +533,28 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
             waybeo_endpoint = agent_config.get("waybeoEndpointUrl")
             waybeo_auth = agent_config.get("waybeoAuthHeader")
             if waybeo_endpoint:
-                # Build Waybeo payload (simpler format)
-                waybeo_payload = {
-                    "ucid": session.ucid,
-                    "call_status": si_payload.get("completion_status", "incomplete"),
-                    "call_start_time": si_payload.get("start_time", ""),
-                    "call_end_time": si_payload.get("end_time", ""),
-                    "call_duration": duration_sec,
-                    "caller_number": session.customer_number or "",
-                    "agent_id": session.agent,
-                    "store_code": session.store_code or "",
-                }
+                if waybeo_template:
+                    rendered_waybeo = render_payload_template(
+                        waybeo_template, template_context
+                    )
+                    if rendered_waybeo.missing_placeholders:
+                        print(
+                            f"[{session.ucid}] ⚠️ Waybeo template missing values for: "
+                            f"{', '.join(rendered_waybeo.missing_placeholders)}"
+                        )
+                    waybeo_payload = rendered_waybeo.payload
+                else:
+                    # Build Waybeo payload (simpler format)
+                    waybeo_payload = {
+                        "ucid": session.ucid,
+                        "call_status": si_payload.get("completion_status", "incomplete"),
+                        "call_start_time": si_payload.get("start_time", ""),
+                        "call_end_time": si_payload.get("end_time", ""),
+                        "call_duration": duration_sec,
+                        "caller_number": session.customer_number or "",
+                        "agent_id": session.agent,
+                        "store_code": session.store_code or "",
+                    }
                 print(f"[{session.ucid}] Delivering to Waybeo webhook: {waybeo_endpoint[:50]}...")
                 await admin_client.push_to_waybeo_webhook(
                     payload=waybeo_payload,

@@ -82,10 +82,19 @@ class AgentDataStorage:
                 json.dump(transcript_data, f, indent=2, ensure_ascii=False)
 
             print(f"[{call_id}] Transcript saved: {filepath}")
-            return filename
+            return str(filepath)
 
         except Exception as e:
             print(f"[{call_id}] Failed to save transcript: {e}")
+            return None
+
+    def load_transcript(self, filepath: str) -> Optional[Dict[str, Any]]:
+        """Load a saved transcript JSON file."""
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"❌ Failed to load transcript: {e}")
             return None
 
     def save_si_payload(

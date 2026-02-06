@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { createVoiceAgentSchema } from "@/lib/validation";
+import { validatePayloadTemplate } from "@/lib/payloadTemplateValidation";
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const voiceAgent = await prisma.voiceAgent.findUnique({
@@ -26,7 +27,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       where: { id: params.id },
       data,
     });
-    return NextResponse.json(voiceAgent);
+    const siValidation = validatePayloadTemplate(data.siPayloadTemplate);
+    const waybeoValidation = validatePayloadTemplate(data.waybeoPayloadTemplate);
+    return NextResponse.json({
+      voiceAgent,
+      templateValidation: {
+        si: siValidation,
+        waybeo: waybeoValidation,
+      },
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Invalid request";
     return NextResponse.json({ error: message }, { status: 400 });

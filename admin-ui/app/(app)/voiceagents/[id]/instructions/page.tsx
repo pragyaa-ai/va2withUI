@@ -134,6 +134,8 @@ export default function ConfigurationPage() {
   const [systemInstructions, setSystemInstructions] = useState("");
   const [siPayloadTemplate, setSiPayloadTemplate] = useState("");
   const [waybeoPayloadTemplate, setWaybeoPayloadTemplate] = useState("");
+  const [templateNotice, setTemplateNotice] = useState<string | null>(null);
+  const [templateNoticeType, setTemplateNoticeType] = useState<"success" | "warning" | null>(null);
   // Webhook endpoint state
   const [siCustomerName, setSiCustomerName] = useState("");
   const [siEndpointUrl, setSiEndpointUrl] = useState("");
@@ -182,6 +184,8 @@ export default function ConfigurationPage() {
   const handleSave = async () => {
     setSaving(true);
     setSaved(false);
+    setTemplateNotice(null);
+    setTemplateNoticeType(null);
     
     let siTemplate = null;
     let waybeoTemplate = null;
@@ -218,8 +222,27 @@ export default function ConfigurationPage() {
       }),
     });
     if (res.ok) {
-      const updated = await res.json();
+      const result = await res.json();
+      const updated = result?.voiceAgent ?? result;
       setAgent(updated);
+
+      const siValidation = result?.templateValidation?.si;
+      const waybeoValidation = result?.templateValidation?.waybeo;
+      const issues = [
+        ...(siValidation?.unknownPlaceholders ?? []).map((item: string) => `SI: ${item}`),
+        ...(waybeoValidation?.unknownPlaceholders ?? []).map((item: string) => `Waybeo: ${item}`),
+      ];
+
+      if (issues.length > 0) {
+        setTemplateNotice(
+          `Template saved, but these fields are not available from transcripts: ${issues.join(", ")}`
+        );
+        setTemplateNoticeType("warning");
+      } else {
+        setTemplateNotice("Payload templates are active. Webhooks will use these formats.");
+        setTemplateNoticeType("success");
+      }
+
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     }
@@ -256,6 +279,17 @@ export default function ConfigurationPage() {
 
   return (
     <div className="space-y-6">
+      {templateNotice && templateNoticeType && (
+        <div
+          className={`rounded-md border px-4 py-3 text-sm ${
+            templateNoticeType === "success"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+              : "border-amber-200 bg-amber-50 text-amber-700"
+          }`}
+        >
+          {templateNotice}
+        </div>
+      )}
       {/* Tab Navigation */}
       <div className="border-b border-slate-200">
         <nav className="flex gap-6">

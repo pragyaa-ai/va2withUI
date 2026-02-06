@@ -143,7 +143,24 @@ class SIPayloadBuilder:
                 if match.groups():
                     return match.group(1).strip().title()
                 # For simple patterns, return the match
-                return match.group(0).strip()
+                raw_value = match.group(0).strip()
+                if key_value == "callback":
+                    return raw_value.capitalize()
+                return raw_value
+        return None
+
+    def _format_timestamp(self, value: Any) -> Optional[str]:
+        """Normalize timestamps to 'YYYY-MM-DD HH:MM:SS'."""
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", ""))
+                return parsed.strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return value
         return None
 
     def _find_timing_for_key(
@@ -156,11 +173,16 @@ class SIPayloadBuilder:
         value_lower = value.lower()
         for i, entry in enumerate(conversation):
             if entry.get("speaker") == "user" and value_lower in entry.get("text", "").lower():
-                timestamp = entry.get("timestamp")
-                if timestamp:
+                start_time = self._format_timestamp(entry.get("timestamp"))
+                end_time = None
+                if i + 1 < len(conversation):
+                    end_time = self._format_timestamp(conversation[i + 1].get("timestamp"))
+                if start_time:
+                    if not end_time:
+                        end_time = start_time
                     return {
-                        "start_time": timestamp,
-                        "end_time": timestamp,
+                        "start_time": start_time,
+                        "end_time": end_time,
                         "sequence": 1,
                     }
         return None
@@ -182,6 +204,20 @@ class SIPayloadBuilder:
             return "complete"
         else:
             return "partial"
+
+    @staticmethod
+    def build_extracted_map(
+        response_data: List[Dict[str, Any]],
+    ) -> Dict[str, Optional[str]]:
+        """Build a simple key->value map from response_data items."""
+        extracted: Dict[str, Optional[str]] = {}
+        for item in response_data:
+            key = item.get("key_value")
+            if not key:
+                continue
+            raw_value = (item.get("key_response") or "").strip()
+            extracted[key] = raw_value or None
+        return extracted
 
     def build_payload(
         self,
@@ -216,6 +252,10 @@ class SIPayloadBuilder:
         end = end_time or now
         duration = duration_sec or int((end - start).total_seconds())
 
+        customer_number = self.customer_number or ""
+        if isinstance(customer_number, str) and customer_number.isdigit():
+            customer_number = int(customer_number)
+
         payload = {
             "id": f"bot_{self.call_id}",
             "customer_name": self.customer_name,
@@ -226,7 +266,7 @@ class SIPayloadBuilder:
             "end_time": end.strftime("%Y-%m-%d %H:%M:%S"),
             "duration": duration,
             "store_code": self.store_code or "",
-            "customer_number": self.customer_number or "",
+            "customer_number": customer_number,
             "language": language or {
                 "welcome": "english",
                 "conversational": "english",
