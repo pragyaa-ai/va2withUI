@@ -269,6 +269,7 @@ class SIPayloadBuilder:
 
         payload = {
             "id": f"bot_{self.call_id}",
+            "agent_slug": self.agent,
             "customer_name": self.customer_name,
             "call_ref_id": self.call_id,
             "call_vendor": "Waybeo",

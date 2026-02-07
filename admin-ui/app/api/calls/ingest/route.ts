@@ -50,6 +50,7 @@ interface TranscriptEntry {
 interface SIPayload {
   id?: string;
   call_ref_id: string;
+  agent_slug?: string;
   customer_name?: string;
   call_vendor?: string;
   store_code?: string;
@@ -183,9 +184,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Find voiceAgent by customer_name (slug)
+    // Find voiceAgent by agent_slug first (most reliable), then fallback to customer_name
     let voiceAgentId: string | null = null;
-    if (payload.customer_name) {
+    if (payload.agent_slug) {
+      const voiceAgent = await prisma.voiceAgent.findUnique({
+        where: { slug: payload.agent_slug.toLowerCase() },
+        select: { id: true },
+      });
+      voiceAgentId = voiceAgent?.id || null;
+    }
+    if (!voiceAgentId && payload.customer_name) {
       const voiceAgent = await prisma.voiceAgent.findFirst({
         where: {
           OR: [

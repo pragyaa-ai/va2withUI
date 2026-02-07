@@ -601,6 +601,24 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
             waybeo_template = agent_config.get("waybeoPayloadTemplate")
             customer_name = agent_config.get("siCustomerName") or payload_builder.customer_name
 
+            # Detect language from conversation (check if mostly Hindi or English)
+            detected_language = "hindi"  # default
+            english_count = 0
+            hindi_markers = ["ji", "haan", "nahi", "aap", "hai", "mein", "kya", "naam"]
+            for entry in transcript_conversation:
+                text_lower = (entry.get("text") or "").lower()
+                # Count entries with common English words and no Hindi markers
+                if any(w in text_lower for w in ["yes", "no", "please", "thank", "want", "interested"]):
+                    if not any(w in text_lower for w in hindi_markers):
+                        english_count += 1
+            if english_count > len(transcript_conversation) * 0.3:
+                detected_language = "english"
+
+            # Determine transfer status from dealer_routing in SI payload
+            dealer_routing = si_payload.get("dealer_routing", {})
+            transfer_status = "transferred" if dealer_routing.get("status") else "not_transferred"
+            transfer_reason = dealer_routing.get("reason", "User decided")
+
             template_context = {
                 "call_id": session.ucid,
                 "agent_slug": session.agent,
@@ -614,6 +632,9 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
                 "end_time": (transcript_end or end_time).strftime("%Y-%m-%d %H:%M:%S"),
                 "duration_sec": transcript_duration,
                 "completion_status": completion_status,
+                "detected_language": detected_language,
+                "transfer_status": transfer_status,
+                "transfer_reason": transfer_reason,
                 "response_data": response_data,
                 "transcript": transcript_conversation,
                 "transcript_text": transcript_text,
