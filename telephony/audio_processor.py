@@ -45,7 +45,7 @@ class AudioProcessor:
             return samples.astype(np.int16, copy=False)
         samples_f = self.int16_to_float32(samples)
         out_f = librosa.resample(
-            samples_f, orig_sr=orig_sr, target_sr=target_sr, res_type="linear"
+            samples_f, orig_sr=orig_sr, target_sr=target_sr, res_type="polyphase"
         )
         return self.float32_to_int16(out_f)
 

@@ -49,7 +49,7 @@ class Config:
 
     # Buffers (ms) - smaller = lower latency, larger = more stable
     AUDIO_BUFFER_MS_INPUT: int = int(os.getenv("AUDIO_BUFFER_MS_INPUT", "100"))
-    AUDIO_BUFFER_MS_OUTPUT: int = int(os.getenv("AUDIO_BUFFER_MS_OUTPUT", "100"))
+    AUDIO_BUFFER_MS_OUTPUT: int = int(os.getenv("AUDIO_BUFFER_MS_OUTPUT", "100"))  # 100ms: stable audio + drip-feed keeps barge-in tight
 
     # Data Storage
     DATA_BASE_DIR: str = os.getenv("DATA_BASE_DIR", "/data")

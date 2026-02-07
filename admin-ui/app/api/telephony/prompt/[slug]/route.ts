@@ -30,6 +30,12 @@ export async function GET(
         voiceName: true,
         systemInstructions: true,
         isActive: true,
+        // Fetch enabled guardrails to inject into system instructions
+        guardrails: {
+          where: { enabled: true },
+          select: { name: true, ruleText: true },
+          orderBy: { createdAt: "asc" },
+        },
         // Payload templates and webhook endpoints for post-call delivery
         siPayloadTemplate: true,
         waybeoPayloadTemplate: true,
@@ -64,6 +70,15 @@ export async function GET(
       FARHAN: "Fenrir",
     };
 
+    // Inject enabled guardrails into system instructions
+    let fullInstructions = agent.systemInstructions || "";
+    if (agent.guardrails && agent.guardrails.length > 0) {
+      const guardrailRules = agent.guardrails
+        .map((g, i) => `${i + 1}. ${g.name}: ${g.ruleText}`)
+        .join("\n");
+      fullInstructions += `\n\n--- MANDATORY GUARDRAILS ---\nYou MUST follow these guardrails strictly at all times. These are non-negotiable rules:\n${guardrailRules}\n--- END GUARDRAILS ---`;
+    }
+
     return NextResponse.json({
       id: agent.id,
       name: agent.name,
@@ -73,7 +88,7 @@ export async function GET(
       language: agent.language,
       voiceName: agent.voiceName,
       geminiVoice: voiceNameMap[agent.voiceName] || "Aoede",
-      systemInstructions: agent.systemInstructions || "",
+      systemInstructions: fullInstructions,
       // Payload templates
       siPayloadTemplate: agent.siPayloadTemplate,
       waybeoPayloadTemplate: agent.waybeoPayloadTemplate,

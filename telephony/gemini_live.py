@@ -35,6 +35,8 @@ class GeminiSessionConfig:
     vad_silence_ms: int = 300
     vad_prefix_ms: int = 400
     activity_handling: str = "START_OF_ACTIVITY_INTERRUPTS"
+    start_of_speech_sensitivity: str = "START_SENSITIVITY_HIGH"
+    end_of_speech_sensitivity: str = "END_SENSITIVITY_HIGH"
 
 
 class GeminiLiveSession:
@@ -82,8 +84,8 @@ class GeminiLiveSession:
                         "disabled": False,
                         "silence_duration_ms": self.cfg.vad_silence_ms,
                         "prefix_padding_ms": self.cfg.vad_prefix_ms,
-                        "end_of_speech_sensitivity": "END_SENSITIVITY_UNSPECIFIED",
-                        "start_of_speech_sensitivity": "START_SENSITIVITY_UNSPECIFIED",
+                        "start_of_speech_sensitivity": self.cfg.start_of_speech_sensitivity,
+                        "end_of_speech_sensitivity": self.cfg.end_of_speech_sensitivity,
                     },
                     "activity_handling": self.cfg.activity_handling,
                 },

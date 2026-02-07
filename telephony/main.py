@@ -169,9 +169,88 @@ def _extract_transcription(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
+async def _audio_sender(
+    session: TelephonySession, cfg: Config
+) -> None:
+    """
+    Drip-feed audio chunks to telephony at real-time rate.
+
+    WHY THIS IS CRITICAL FOR BARGE-IN:
+    Gemini generates audio faster than real-time and delivers it in bursts.
+    If we forward all chunks instantly, the telephony provider (Waybeo) queues
+    up several seconds of audio. When the user interrupts, clearing our local
+    buffer does nothing — Waybeo keeps playing its queued audio.
+
+    By pacing output at real-time rate (one 100ms chunk every 100ms), the local
+    output_buffer acts as the playback queue. On barge-in, clearing the buffer
+    immediately stops audio delivery — max overshoot is one chunk (~100ms).
+    """
+    import time
+
+    chunk_samples = cfg.AUDIO_BUFFER_SAMPLES_OUTPUT
+    chunk_duration = cfg.AUDIO_BUFFER_MS_OUTPUT / 1000.0  # seconds
+    next_send_time: float | None = None
+
+    try:
+        while not session.closed:
+            if len(session.output_buffer) >= chunk_samples:
+                now = time.monotonic()
+
+                # Pace: if we have a scheduled time, wait until then
+                if next_send_time is not None:
+                    wait = next_send_time - now
+                    if wait > 0:
+                        await asyncio.sleep(wait)
+                        # Re-check buffer — may have been cleared by barge-in
+                        if len(session.output_buffer) < chunk_samples:
+                            next_send_time = None
+                            continue
+
+                chunk = session.output_buffer[:chunk_samples]
+                session.output_buffer = session.output_buffer[chunk_samples:]
+
+                payload = {
+                    "event": "media",
+                    "type": "media",
+                    "ucid": session.ucid,
+                    "data": {
+                        "samples": chunk,
+                        "bitsPerSample": 16,
+                        "sampleRate": cfg.TELEPHONY_SR,
+                        "channelCount": 1,
+                        "numberOfFrames": len(chunk),
+                        "type": "data",
+                    },
+                }
+                if session.client_ws.open:
+                    await session.client_ws.send(json.dumps(payload))
+                    if cfg.DEBUG:
+                        print(f"[{session.ucid}] 🔊 Sent {len(chunk)} samples to telephony")
+
+                # Schedule next send at exactly one chunk_duration later
+                if next_send_time is None:
+                    next_send_time = time.monotonic() + chunk_duration
+                else:
+                    next_send_time += chunk_duration
+                    # Prevent drift accumulation: if we fell too far behind, reset
+                    if next_send_time < time.monotonic() - chunk_duration:
+                        next_send_time = time.monotonic() + chunk_duration
+            else:
+                # Buffer empty — reset pacing and poll quickly
+                next_send_time = None
+                await asyncio.sleep(0.005)  # 5ms polling
+    except Exception as e:
+        if cfg.DEBUG:
+            print(f"[{session.ucid}] ❌ Audio sender error: {e}")
+
+
 async def _gemini_reader(
     session: TelephonySession, audio_processor: AudioProcessor, cfg: Config
 ) -> None:
+    """
+    Read messages from Gemini Live and buffer audio for the drip-feed sender.
+    Does NOT send audio directly — _audio_sender handles paced delivery.
+    """
     try:
         async for msg in session.gemini.messages():
             if cfg.DEBUG:
@@ -179,16 +258,17 @@ async def _gemini_reader(
                     print(f"[{session.ucid}] 🏁 Gemini setupComplete")
 
             if _is_interrupted(msg):
-                # Barge-in: clear any queued audio to telephony
+                # Barge-in: clear the output buffer immediately.
+                # Since _audio_sender drip-feeds at real-time rate, clearing
+                # the buffer stops audio delivery within ~5ms (one poll cycle).
                 if cfg.LOG_TRANSCRIPTS:
                     print(f"[{session.ucid}] 🛑 Gemini interrupted → clearing output buffer")
                 session.output_buffer.clear()
 
-                # Send clear event to telephony provider to stop queued audio immediately
+                # Also send clear event in case telephony provider supports it
                 try:
                     clear_payload = {
                         "event": "clear",
-                        "stream_sid": session.ucid,
                         "ucid": session.ucid,
                     }
                     await session.client_ws.send(json.dumps(clear_payload))
@@ -211,31 +291,24 @@ async def _gemini_reader(
             if not audio_b64:
                 continue
 
+            # Buffer audio — the _audio_sender task handles paced delivery
             samples_8k = audio_processor.process_output_gemini_b64_to_8k_samples(audio_b64)
-            session.output_buffer.extend(samples_8k)
 
-            # send consistent chunks
-            while len(session.output_buffer) >= cfg.AUDIO_BUFFER_SAMPLES_OUTPUT:
-                chunk = session.output_buffer[: cfg.AUDIO_BUFFER_SAMPLES_OUTPUT]
-                session.output_buffer = session.output_buffer[cfg.AUDIO_BUFFER_SAMPLES_OUTPUT :]
-
-                payload = {
-                    "event": "media",
-                    "type": "media",
-                    "ucid": session.ucid,
-                    "data": {
-                        "samples": chunk,
-                        "bitsPerSample": 16,
-                        "sampleRate": cfg.TELEPHONY_SR,
-                        "channelCount": 1,
-                        "numberOfFrames": len(chunk),
-                        "type": "data",
-                    },
-                }
-                if session.client_ws.open:
-                    await session.client_ws.send(json.dumps(payload))
-                    if cfg.DEBUG:
-                        print(f"[{session.ucid}] 🔊 Sent {len(chunk)} samples to telephony")
+            # Crossfade at chunk boundary to prevent clicks/pops between
+            # independently-resampled Gemini audio chunks
+            XFADE = 8  # 8 samples = 1ms at 8kHz — imperceptible but smooths edges
+            if session.output_buffer and len(samples_8k) > XFADE:
+                buf_len = len(session.output_buffer)
+                for i in range(min(XFADE, buf_len)):
+                    alpha = (i + 1) / XFADE
+                    idx = buf_len - XFADE + i
+                    if idx >= 0:
+                        session.output_buffer[idx] = int(
+                            session.output_buffer[idx] * (1 - alpha) + samples_8k[i] * alpha
+                        )
+                session.output_buffer.extend(samples_8k[XFADE:])
+            else:
+                session.output_buffer.extend(samples_8k)
     except Exception as e:
         if cfg.DEBUG:
             print(f"[{session.ucid}] ❌ Gemini reader error: {e}")
@@ -290,12 +363,12 @@ async def handle_client(client_ws, path: str):
         model_uri=cfg.model_uri,
         voice=cfg.GEMINI_VOICE,
         system_instructions=prompt,
-        temperature=0.7,  # Lower temperature for calmer, more consistent responses
-        enable_affective_dialog=True,
+        temperature=0.5,  # Low temperature for calm, professional responses
+        enable_affective_dialog=False,  # Disabled: prevents overly excited vocal prosody
         enable_input_transcription=True,   # Enable for transcript capture
         enable_output_transcription=True,  # Enable for transcript capture
-        vad_silence_ms=200,   # Lowered for faster barge-in detection (was 500)
-        vad_prefix_ms=250,    # Lowered for faster barge-in detection (was 500)
+        vad_silence_ms=150,   # Aggressive for fast barge-in detection
+        vad_prefix_ms=100,    # Low prefix for faster activity detection onset
         activity_handling="START_OF_ACTIVITY_INTERRUPTS",
     )
 
@@ -344,7 +417,10 @@ async def handle_client(client_ws, path: str):
         if cfg.LOG_TRANSCRIPTS:
             print(f"[{session.ucid}] ✅ Connected to Gemini Live")
 
-        # Start reader task FIRST so we catch the greeting audio
+        # Start audio sender (drip-feeds buffered audio at real-time rate)
+        sender_task = asyncio.create_task(_audio_sender(session, cfg))
+
+        # Start reader task so we catch the greeting audio
         gemini_task = asyncio.create_task(_gemini_reader(session, audio_processor, cfg))
 
         # Trigger greeting immediately - don't wait for user audio
@@ -386,9 +462,15 @@ async def handle_client(client_ws, path: str):
                 if cfg.DEBUG and chunks_sent > 0:
                     print(f"[{session.ucid}] 🎤 Sent {chunks_sent} audio chunk(s) to Gemini ({len(samples)} samples received)")
 
+        session.closed = True
         gemini_task.cancel()
+        sender_task.cancel()
         try:
             await gemini_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await sender_task
         except asyncio.CancelledError:
             pass
 
@@ -406,6 +488,7 @@ async def handle_client(client_ws, path: str):
         # Save data even on error
         await _save_call_data(session, cfg)
     finally:
+        session.closed = True  # Ensure _audio_sender exits in all paths
         try:
             await session.gemini.close()
         except Exception:
