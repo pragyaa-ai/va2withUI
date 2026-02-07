@@ -363,7 +363,7 @@ async def handle_client(client_ws, path: str):
         model_uri=cfg.model_uri,
         voice=cfg.GEMINI_VOICE,
         system_instructions=prompt,
-        temperature=0.5,  # Low temperature for calm, professional responses
+        temperature=0.3,  # Very low temperature for calm, deterministic responses
         enable_affective_dialog=False,  # Disabled: prevents overly excited vocal prosody
         enable_input_transcription=True,   # Enable for transcript capture
         enable_output_transcription=True,  # Enable for transcript capture
