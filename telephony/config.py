@@ -1,17 +1,9 @@
 """
-VoiceAgent Telephony service configuration.
+Telephony service configuration (Waybeo) for Kia VoiceAgent.
 
-This service handles WebSocket connections for telephony providers
-and bridges audio to Gemini Live for AI-powered voice conversations.
-
-Environment Variables:
-- HOST: Server host (default: 0.0.0.0)
-- PORT: Server port (default: 8081)
-- WS_PATH: WebSocket path (default: /ws)
-- GCP_PROJECT_ID: Google Cloud project ID (required)
-- GEMINI_MODEL: Gemini model name (default: gemini-live-2.5-flash-native-audio)
-- DATA_BASE_DIR: Base directory for data storage (default: /data)
-- ADMIN_API_BASE: Admin UI API base URL (default: http://127.0.0.1:3100)
+This service is intentionally separated from the UI Gemini proxy so that:
+- UI deployment remains stable (Gemini WS routed via nginx on /geminiWs)
+- Telephony can own raw WS ports 8080 (/ws) and 8081 (/wsNew1)
 """
 
 from __future__ import annotations
@@ -51,7 +43,7 @@ class Config:
     GEMINI_VOICE: str = os.getenv("GEMINI_VOICE", "Aoede")
 
     # Audio
-    TELEPHONY_SR: int = int(os.getenv("TELEPHONY_SR", "8000"))  # Telephony input/output
+    TELEPHONY_SR: int = int(os.getenv("TELEPHONY_SR", "8000"))  # Waybeo input/output
     GEMINI_INPUT_SR: int = int(os.getenv("GEMINI_INPUT_SR", "16000"))  # Gemini mic input
     GEMINI_OUTPUT_SR: int = int(os.getenv("GEMINI_OUTPUT_SR", "24000"))  # Gemini audio output
 
@@ -83,45 +75,46 @@ class Config:
     @classmethod
     def validate(cls, cfg: "Config") -> None:
         if not cfg.GCP_PROJECT_ID:
-            raise ValueError("GCP_PROJECT_ID is required (e.g. your-gcp-project)")
+            raise ValueError("GCP_PROJECT_ID is required (e.g. voiceagentprojects)")
 
         if not cfg.WS_PATH.startswith("/"):
-            raise ValueError("WS_PATH must start with '/' (e.g. /ws)")
+            raise ValueError("WS_PATH must start with '/' (e.g. /ws or /wsNew1)")
 
     def print_config(self) -> None:
         print("=" * 68)
-        print("VoiceAgent Telephony (Gemini Live) - Configuration")
+        print("📞 VoiceAgent Telephony (Gemini Live) – Configuration")
         print("=" * 68)
-        print(f"Server: ws://{self.HOST}:{self.PORT}{self.WS_PATH}")
-        print(f"Gemini model: {self.GEMINI_MODEL}")
-        print(f"Voice: {self.GEMINI_VOICE}")
-        print(f"Location: {self.GEMINI_LOCATION}")
-        print(f"Project: {self.GCP_PROJECT_ID}")
+        print(f"🌐 Server: ws://{self.HOST}:{self.PORT}{self.WS_PATH}")
+        print(f"🧠 Gemini model: {self.GEMINI_MODEL}")
+        print(f"🎙️  Voice: {self.GEMINI_VOICE}")
+        print(f"📍 Location: {self.GEMINI_LOCATION}")
+        print(f"🏷️  Project: {self.GCP_PROJECT_ID}")
         print(
-            f"Audio SR: telephony={self.TELEPHONY_SR}Hz, "
+            f"🎵 Audio SR: telephony={self.TELEPHONY_SR}Hz, "
             f"gemini_in={self.GEMINI_INPUT_SR}Hz, gemini_out={self.GEMINI_OUTPUT_SR}Hz"
         )
         print(
-            f"Buffers: in={self.AUDIO_BUFFER_MS_INPUT}ms "
+            f"🎵 Buffers: in={self.AUDIO_BUFFER_MS_INPUT}ms "
             f"({self.AUDIO_BUFFER_SAMPLES_INPUT} samples), "
             f"out={self.AUDIO_BUFFER_MS_OUTPUT}ms "
             f"({self.AUDIO_BUFFER_SAMPLES_OUTPUT} samples)"
         )
-        print(f"Data dir: {self.DATA_BASE_DIR}")
-        print(f"Data storage: {'enabled' if self.ENABLE_DATA_STORAGE else 'disabled'}")
-        print(f"Admin push: {'enabled' if self.ENABLE_ADMIN_PUSH else 'disabled'}")
-        print(f"DEBUG: {self.DEBUG}")
+        print(f"📁 Data dir: {self.DATA_BASE_DIR}")
+        print(f"🔄 Data storage: {'✅' if self.ENABLE_DATA_STORAGE else '❌'}")
+        print(f"📤 Admin push: {'✅' if self.ENABLE_ADMIN_PUSH else '❌'}")
+        print(f"🐞 DEBUG: {self.DEBUG}")
         print("=" * 68)
 
 
-# Agent to directory mapping (optional overrides)
-# By default, agents use their slug as directory name
-# Add explicit mappings only if needed for legacy compatibility
+# Agent to directory mapping
+# For v2+ agents, data is stored in /data/{agent_slug}/
+# Any agent not listed here uses its slug directly as directory name
+# This allows new agents added via UI to auto-use their slug
 AGENT_DIRS = {
-    # "demo-sales": "demo",  # Example: map demo-sales -> demo directory
+    "spotlight": "kia2",  # Kia v2 (Gemini Live) - maps spotlight -> kia2 directory
+    # "tata": "tata",     # Would use "tata" anyway (fallback)
+    # "skoda": "skoda",   # Would use "skoda" anyway (fallback)
 }
-
-
 def get_agent_dir(agent: str) -> str:
     """
     Get the data directory name for an agent.

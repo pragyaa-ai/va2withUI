@@ -239,7 +239,7 @@ export default function ConfigurationPage() {
         );
         setTemplateNoticeType("warning");
       } else {
-        setTemplateNotice("Payload templates are active. Webhooks will use these formats.");
+        setTemplateNotice("Payload templates are active.");
         setTemplateNoticeType("success");
       }
 

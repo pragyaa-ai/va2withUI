@@ -1,10 +1,10 @@
 """
-Admin UI API client for VoiceAgent telephony service.
+Admin UI API client for pushing call data.
 
-Handles:
-- Pushing call data to Admin UI for storage and analytics
-- Fetching VoiceAgent configuration (prompts, webhook settings)
-- Delivering webhooks to external endpoints (SI, Waybeo, etc.)
+Sends SI payloads to the Admin UI /api/calls/ingest endpoint
+for storage in the database and analytics visualization.
+
+Also handles webhook delivery to external SI and Waybeo endpoints.
 """
 
 from __future__ import annotations

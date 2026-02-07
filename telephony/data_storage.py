@@ -2,11 +2,11 @@
 Agent-aware data storage for VoiceAgent telephony.
 
 Saves transcripts and payloads to agent-specific directories:
-- /data/{agent-slug}/transcripts/  - Conversation transcripts
-- /data/{agent-slug}/si/           - SI webhook payloads
-- /data/{agent-slug}/waybeo/       - Waybeo callback payloads
-
-New VoiceAgents added via Admin UI automatically use their slug as directory name.
+- /data/kia2/transcripts/  - Kia v2 (Gemini Live) transcripts
+- /data/kia2/si/           - SI webhook payloads
+- /data/kia2/waybeo/       - Waybeo callback payloads
+- /data/tata/...           - Tata VoiceAgent
+- /data/skoda/...          - Skoda VoiceAgent
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ class AgentDataStorage:
             metadata: Optional additional metadata
 
         Returns:
-            Saved filename or None on error
+            Saved filepath or None on error
         """
         if not self.cfg.ENABLE_DATA_STORAGE:
             return None
@@ -81,11 +81,11 @@ class AgentDataStorage:
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(transcript_data, f, indent=2, ensure_ascii=False)
 
-            print(f"[{call_id}] Transcript saved: {filepath}")
+            print(f"[{call_id}] 📄 Transcript saved: {filepath}")
             return str(filepath)
 
         except Exception as e:
-            print(f"[{call_id}] Failed to save transcript: {e}")
+            print(f"[{call_id}] ❌ Failed to save transcript: {e}")
             return None
 
     def load_transcript(self, filepath: str) -> Optional[Dict[str, Any]]:
@@ -103,7 +103,7 @@ class AgentDataStorage:
         payload: Dict[str, Any],
     ) -> Optional[str]:
         """
-        Save SI webhook payload.
+        Save SI (Single Interface) webhook payload.
 
         Args:
             call_id: Unique call identifier
@@ -123,11 +123,11 @@ class AgentDataStorage:
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2, ensure_ascii=False)
 
-            print(f"[{call_id}] SI payload saved: {filepath}")
+            print(f"[{call_id}] 📤 SI payload saved: {filepath}")
             return filename
 
         except Exception as e:
-            print(f"[{call_id}] Failed to save SI payload: {e}")
+            print(f"[{call_id}] ❌ Failed to save SI payload: {e}")
             return None
 
     def save_waybeo_payload(
@@ -156,9 +156,9 @@ class AgentDataStorage:
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2, ensure_ascii=False)
 
-            print(f"[{call_id}] Waybeo payload saved: {filepath}")
+            print(f"[{call_id}] 📞 Waybeo payload saved: {filepath}")
             return filename
 
         except Exception as e:
-            print(f"[{call_id}] Failed to save Waybeo payload: {e}")
+            print(f"[{call_id}] ❌ Failed to save Waybeo payload: {e}")
             return None

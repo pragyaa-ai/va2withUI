@@ -1,19 +1,19 @@
 """
-Webhook payload builder for VoiceAgent.
+SI (Single Interface) webhook payload builder.
 
-Constructs webhook payloads from conversation transcripts in SI format:
+Constructs the SI API payload format from conversation transcripts:
 {
     "id": "bot_...",
     "call_ref_id": "...",
-    "customer_name": "CustomerName",
-    "store_code": "STORE001",
+    "customer_name": "Kia",
+    "store_code": "UK401",
     "start_time": "2026-01-31 13:36:41",
     "end_time": "2026-01-31 13:38:00",
     "duration": 79,
     "completion_status": "partial",
     "response_data": [
-        {"key_value": "name", "key_response": "John", ...},
-        {"key_value": "interest", "key_response": "Product A", ...},
+        {"key_value": "name", "key_response": "Suman", ...},
+        {"key_value": "model", "key_response": "EV9", ...},
     ]
 }
 """
@@ -25,46 +25,57 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 
+# Customer name mapping for agents
+AGENT_CUSTOMER_NAMES = {
+    "spotlight": "Kia",
+    "kia": "Kia",
+    "tata": "Tata",
+    "skoda": "Skoda",
+}
+
 # Key patterns to extract from conversation
 # Maps key_value to (label, regex patterns for extraction)
 EXTRACTION_PATTERNS: Dict[str, Tuple[str, List[str]]] = {
     "name": (
         "What's your name",
         [
-            r"(?:my name is|i am|this is|i'm)\s+([A-Za-z\s]+)",
-            r"(?:name|naam)[:\s]+([A-Za-z\s]+)",
+            r"(?:my name is|i am|this is|mera naam|naam)\s+([A-Za-z\u0900-\u097F]+)",
+            r"(?:name|naam)[:\s]+([A-Za-z\u0900-\u097F]+)",
         ],
     ),
-    "interest": (
-        "What are you interested in",
+    "model": (
+        "Which model you are looking for",
         [
-            r"(?:interested in|looking for|want|need)\s+(?:the\s+)?([A-Za-z0-9\s]+?)(?:\s+(?:service|product))?(?:\.|,|$)",
+            r"(?:interested in|looking for|want|chahiye|dekhna hai)\s+(?:the\s+)?([A-Za-z0-9\s]+?)(?:\s+(?:car|model|variant))?(?:\.|,|$)",
+            r"(?:ev9|ev6|seltos|sonet|carens|syros|carnival)",
+            r"(?:nexon|harrier|safari|punch|tiago|tigor|altroz|curvv)",
+            r"(?:slavia|kushaq|superb|octavia|kodiaq)",
         ],
     ),
     "email": (
-        "What is your email",
+        "What is your email id",
         [
             r"([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})",
         ],
     ),
-    "callback": (
-        "Would you like a callback",
+    "test_drive": (
+        "Do you want to schedule a test drive",
         [
-            r"(?:yes|sure|ok|definitely|please)",
-            r"(?:no|not|nope|later)",
+            r"(?:yes|sure|ok|definitely|haan|ji|हाँ|जी)",
+            r"(?:no|not|nahi|nहीं|abhi nahi)",
         ],
     ),
     "phone": (
         "Phone number",
         [
-            r"(?:\+\d{1,3})?[\d\s-]{10,}",
+            r"(?:\+91|91)?[6-9]\d{9}",
         ],
     ),
 }
 
 
 class SIPayloadBuilder:
-    """Builds webhook payloads from conversation data."""
+    """Builds SI webhook payloads from conversation data."""
 
     def __init__(
         self,
@@ -72,14 +83,12 @@ class SIPayloadBuilder:
         call_id: str,
         customer_number: Optional[str] = None,
         store_code: Optional[str] = None,
-        customer_name: Optional[str] = None,
     ):
         self.agent = agent.lower()
         self.call_id = call_id
         self.customer_number = customer_number
         self.store_code = store_code
-        # Use provided customer_name or derive from agent
-        self.customer_name = customer_name or self.agent.replace("-", " ").title()
+        self.customer_name = AGENT_CUSTOMER_NAMES.get(self.agent, self.agent.title())
 
     def extract_response_data(
         self,
@@ -142,10 +151,12 @@ class SIPayloadBuilder:
                 # For patterns with capture groups, return the group
                 if match.groups():
                     return match.group(1).strip().title()
-                # For simple patterns, return the match
+                # For simple patterns (like car models), return the match
                 raw_value = match.group(0).strip()
-                if key_value == "callback":
+                if key_value == "test_drive":
                     return raw_value.capitalize()
+                if key_value == "model":
+                    return raw_value.upper()
                 return raw_value
         return None
 
@@ -230,7 +241,7 @@ class SIPayloadBuilder:
         include_transcript: bool = True,
     ) -> Dict[str, Any]:
         """
-        Build complete webhook payload.
+        Build complete SI webhook payload.
 
         Args:
             conversation: List of conversation entries
@@ -242,7 +253,7 @@ class SIPayloadBuilder:
             include_transcript: Whether to include raw transcript (for Admin UI)
 
         Returns:
-            Complete payload dict
+            Complete SI payload dict
         """
         response_data = self.extract_response_data(conversation)
         completion_status = self.determine_completion_status(response_data)
@@ -260,7 +271,7 @@ class SIPayloadBuilder:
             "id": f"bot_{self.call_id}",
             "customer_name": self.customer_name,
             "call_ref_id": self.call_id,
-            "call_vendor": "Telephony",
+            "call_vendor": "Waybeo",
             "recording_url": "",
             "start_time": start.strftime("%Y-%m-%d %H:%M:%S"),
             "end_time": end.strftime("%Y-%m-%d %H:%M:%S"),
@@ -268,8 +279,8 @@ class SIPayloadBuilder:
             "store_code": self.store_code or "",
             "customer_number": customer_number,
             "language": language or {
-                "welcome": "english",
-                "conversational": "english",
+                "welcome": "hindi",
+                "conversational": "hindi",
             },
             "dealer_routing": dealer_routing or {
                 "status": False,

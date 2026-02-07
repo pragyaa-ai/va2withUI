@@ -1,22 +1,19 @@
 """
-VoiceAgent Telephony WebSocket service (Gemini Live backend).
+Waybeo Telephony WebSocket service (Gemini Live backend) - MVP.
 
-This service bridges telephony audio to Gemini Live for AI-powered voice conversations.
-
-Protocol:
+Protocol assumption matches the working singleinterface telephony service:
 Client sends JSON messages with:
 - event: "start" | "media" | "stop"
 - ucid: string (call/session id)
 - data.samples: number[] (int16 PCM samples at 8kHz)
 
-Audio Processing:
-- Telephony 8kHz -> resample -> Gemini 16kHz PCM16 base64
-- Gemini audio output (24kHz PCM16 base64) -> resample -> Telephony 8kHz samples
+This service bridges telephony audio to Gemini Live:
+- Waybeo 8kHz -> resample -> Gemini 16kHz PCM16 base64
+- Gemini audio output (assumed 24kHz PCM16 base64) -> resample -> Waybeo 8kHz samples
 
 Multi-agent support:
 - Routes to different prompts based on ?agent=xxx query parameter
-- Agent configuration is loaded from Admin UI database
-- Fallback to local sample_prompt.txt if API unavailable
+- Supported agents: spotlight (Kia), tata, skoda
 """
 
 from __future__ import annotations
@@ -57,8 +54,14 @@ class TelephonySession:
     store_code: Optional[str] = None
 
 
-# Fallback prompt file for new agents without API configuration
-DEFAULT_PROMPT_FILE = "sample_prompt.txt"
+# Supported agents and their prompt files (fallback if API unavailable)
+AGENT_PROMPTS = {
+    "spotlight": "kia_prompt.txt",  # Kia v2 (Gemini Live) - active testing
+    "tata": "tata_prompt.txt",
+    "skoda": "skoda_prompt.txt",
+}
+
+VALID_AGENTS = set(AGENT_PROMPTS.keys())
 
 # Admin UI API URL for fetching prompts (runs on same VM)
 ADMIN_API_BASE = os.getenv("ADMIN_API_BASE", "http://127.0.0.1:3100")
@@ -81,30 +84,32 @@ def _fetch_prompt_from_api(agent: str) -> Optional[str]:
                 data = json.loads(resp.read().decode("utf-8"))
                 instructions = data.get("systemInstructions", "")
                 if instructions and instructions.strip():
-                    print(f"[telephony] Loaded prompt from API for agent: {agent}")
+                    print(f"[telephony] ✅ Loaded prompt from API for agent: {agent}")
                     return instructions
     except urllib.error.HTTPError as e:
-        print(f"[telephony] API error for {agent}: HTTP {e.code}")
+        print(f"[telephony] ⚠️ API error for {agent}: HTTP {e.code}")
     except Exception as e:
-        print(f"[telephony] API unavailable for {agent}: {e}")
+        print(f"[telephony] ⚠️ API unavailable for {agent}: {e}")
     return None
 
 
 def _read_prompt_from_file(agent: str) -> str:
     """Load prompt from local .txt file (fallback)."""
-    prompt_file = os.path.join(os.path.dirname(__file__), DEFAULT_PROMPT_FILE)
+    agent_lower = agent.lower()
+    prompt_filename = AGENT_PROMPTS.get(agent_lower, "kia_prompt.txt")
+    prompt_file = os.path.join(os.path.dirname(__file__), prompt_filename)
     
     try:
         with open(prompt_file, "r", encoding="utf-8") as f:
-            print(f"[telephony] Loaded prompt from file: {DEFAULT_PROMPT_FILE}")
+            print(f"[telephony] 📄 Loaded prompt from file: {prompt_filename}")
             return f.read()
     except FileNotFoundError:
-        return f"You are a helpful {agent} assistant. Be concise and friendly."
+        return f"You are a helpful {agent} sales assistant. Be concise and friendly."
     except Exception:
-        return "You are a helpful assistant. Be concise and friendly."
+        return "You are a helpful sales assistant. Be concise and friendly."
 
 
-def _read_prompt_text(agent: str = "demo") -> str:
+def _read_prompt_text(agent: str = "spotlight") -> str:
     """
     Load prompt for the specified agent.
     Priority: 1) Admin UI API (database), 2) Local .txt file (fallback)
@@ -171,13 +176,26 @@ async def _gemini_reader(
         async for msg in session.gemini.messages():
             if cfg.DEBUG:
                 if msg.get("setupComplete"):
-                    print(f"[{session.ucid}] Gemini setupComplete")
+                    print(f"[{session.ucid}] 🏁 Gemini setupComplete")
 
             if _is_interrupted(msg):
                 # Barge-in: clear any queued audio to telephony
                 if cfg.LOG_TRANSCRIPTS:
-                    print(f"[{session.ucid}] Gemini interrupted - clearing output buffer")
+                    print(f"[{session.ucid}] 🛑 Gemini interrupted → clearing output buffer")
                 session.output_buffer.clear()
+
+                # Send clear event to telephony provider to stop queued audio immediately
+                try:
+                    clear_payload = {
+                        "event": "clear",
+                        "stream_sid": session.ucid,
+                        "ucid": session.ucid,
+                    }
+                    await session.client_ws.send(json.dumps(clear_payload))
+                    if cfg.DEBUG:
+                        print(f"[{session.ucid}] 🔇 Sent clear event to telephony")
+                except Exception:
+                    pass
                 continue
 
             # Capture transcription if present
@@ -187,7 +205,7 @@ async def _gemini_reader(
                 if cfg.LOG_TRANSCRIPTS:
                     speaker = transcription["speaker"]
                     text = transcription["text"][:50] + "..." if len(transcription["text"]) > 50 else transcription["text"]
-                    print(f"[{session.ucid}] {speaker}: {text}")
+                    print(f"[{session.ucid}] 📝 {speaker}: {text}")
 
             audio_b64 = _extract_audio_b64_from_gemini_message(msg)
             if not audio_b64:
@@ -217,36 +235,42 @@ async def _gemini_reader(
                 if session.client_ws.open:
                     await session.client_ws.send(json.dumps(payload))
                     if cfg.DEBUG:
-                        print(f"[{session.ucid}] Sent {len(chunk)} samples to telephony")
+                        print(f"[{session.ucid}] 🔊 Sent {len(chunk)} samples to telephony")
     except Exception as e:
         if cfg.DEBUG:
-            print(f"[{session.ucid}] Gemini reader error: {e}")
+            print(f"[{session.ucid}] ❌ Gemini reader error: {e}")
 
 
 async def handle_client(client_ws, path: str):
     cfg = Config()
     Config.validate(cfg)
 
-    # websockets passes the request path including querystring (e.g. "/ws?agent=demo-sales").
-    # Telephony providers commonly append query params; accept those as long as the base path matches.
+    # websockets passes the request path including querystring (e.g. "/wsNew1?agent=spotlight").
+    # Waybeo/Ozonetel commonly append query params; accept those as long as the base path matches.
     parsed_url = urlparse(path or "")
     base_path = parsed_url.path
     query_params = parse_qs(parsed_url.query)
     
-    # Extract agent parameter (default to "demo" for demo agent)
-    agent = query_params.get("agent", ["demo"])[0]
+    # Extract agent parameter (default to "spotlight" for Kia)
+    agent = query_params.get("agent", ["spotlight"])[0]
 
-    # Only accept configured base path (e.g. /ws)
+    # Only accept configured base path (e.g. /ws or /wsNew1)
     if base_path != cfg.WS_PATH:
         if cfg.DEBUG:
             print(
-                f"[telephony] Rejecting connection: path={path!r} base_path={base_path!r} expected={cfg.WS_PATH!r}"
+                f"[telephony] ❌ Rejecting connection: path={path!r} base_path={base_path!r} expected={cfg.WS_PATH!r}"
             )
         await client_ws.close(code=1008, reason="Invalid path")
         return
 
+    # Strict validation: reject unknown agents
+    if agent.lower() not in VALID_AGENTS:
+        print(f"[telephony] ❌ Rejecting unknown agent: {agent!r} (valid: {VALID_AGENTS})")
+        await client_ws.close(code=1008, reason=f"Unknown agent: {agent}")
+        return
+
     if cfg.DEBUG:
-        print(f"[telephony] Agent: {agent}")
+        print(f"[telephony] 🎯 Agent: {agent}")
 
     rates = AudioRates(
         telephony_sr=cfg.TELEPHONY_SR,
@@ -266,11 +290,12 @@ async def handle_client(client_ws, path: str):
         model_uri=cfg.model_uri,
         voice=cfg.GEMINI_VOICE,
         system_instructions=prompt,
+        temperature=0.7,  # Lower temperature for calmer, more consistent responses
         enable_affective_dialog=True,
         enable_input_transcription=True,   # Enable for transcript capture
         enable_output_transcription=True,  # Enable for transcript capture
-        vad_silence_ms=500,   # VAD silence threshold
-        vad_prefix_ms=500,    # VAD prefix padding
+        vad_silence_ms=200,   # Lowered for faster barge-in detection (was 500)
+        vad_prefix_ms=250,    # Lowered for faster barge-in detection (was 500)
         activity_handling="START_OF_ACTIVITY_INTERRUPTS",
     )
 
@@ -290,10 +315,17 @@ async def handle_client(client_ws, path: str):
     )
 
     try:
-        # Wait for start event to get real UCID before connecting upstream
+        # Start Gemini connection EARLY (in parallel with waiting for start event)
+        # This reduces initial latency by ~4 seconds as Gemini warms up in parallel
+        if cfg.LOG_TRANSCRIPTS:
+            print(f"[telephony] 🚀 Starting Gemini connection early...")
+        gemini_connect_task = asyncio.create_task(session.gemini.connect())
+
+        # Wait for start event to get real UCID
         first = await asyncio.wait_for(client_ws.recv(), timeout=10.0)
         start_msg = json.loads(first)
         if start_msg.get("event") != "start":
+            gemini_connect_task.cancel()
             await client_ws.close(code=1008, reason="Expected start event")
             return
 
@@ -305,12 +337,12 @@ async def handle_client(client_ws, path: str):
         )
 
         if cfg.LOG_TRANSCRIPTS:
-            print(f"[{session.ucid}] start event received on path={path}")
+            print(f"[{session.ucid}] 🎬 start event received on path={path}")
 
-        # Connect to Gemini
-        await session.gemini.connect()
+        # Wait for Gemini connection (started earlier for speed)
+        await gemini_connect_task
         if cfg.LOG_TRANSCRIPTS:
-            print(f"[{session.ucid}] Connected to Gemini Live")
+            print(f"[{session.ucid}] ✅ Connected to Gemini Live")
 
         # Start reader task FIRST so we catch the greeting audio
         gemini_task = asyncio.create_task(_gemini_reader(session, audio_processor, cfg))
@@ -318,7 +350,7 @@ async def handle_client(client_ws, path: str):
         # Trigger greeting immediately - don't wait for user audio
         await session.gemini.trigger_greeting()
         if cfg.LOG_TRANSCRIPTS:
-            print(f"[{session.ucid}] Greeting triggered")
+            print(f"[{session.ucid}] 🎙️ Greeting triggered")
 
         # Process remaining messages
         async for raw in client_ws:
@@ -330,7 +362,7 @@ async def handle_client(client_ws, path: str):
             event = msg.get("event")
             if event in {"stop", "end", "close"}:
                 if cfg.LOG_TRANSCRIPTS:
-                    print(f"[{session.ucid}] stop event received")
+                    print(f"[{session.ucid}] 📞 stop event received")
                 break
 
             if event == "media" and msg.get("data"):
@@ -352,7 +384,7 @@ async def handle_client(client_ws, path: str):
                     chunks_sent += 1
 
                 if cfg.DEBUG and chunks_sent > 0:
-                    print(f"[{session.ucid}] Sent {chunks_sent} audio chunk(s) to Gemini ({len(samples)} samples received)")
+                    print(f"[{session.ucid}] 🎤 Sent {chunks_sent} audio chunk(s) to Gemini ({len(samples)} samples received)")
 
         gemini_task.cancel()
         try:
@@ -370,7 +402,7 @@ async def handle_client(client_ws, path: str):
         await _save_call_data(session, cfg)
     except Exception as e:
         if cfg.DEBUG:
-            print(f"[{session.ucid}] Telephony handler error: {e}")
+            print(f"[{session.ucid}] ❌ Telephony handler error: {e}")
         # Save data even on error
         await _save_call_data(session, cfg)
     finally:
@@ -399,13 +431,13 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
 
     if not session.conversation:
         if cfg.DEBUG:
-            print(f"[{session.ucid}] No conversation to save")
+            print(f"[{session.ucid}] ⚠️ No conversation to save")
         return
 
     end_time = datetime.utcnow()
     duration_sec = int((end_time - session.start_time).total_seconds()) if session.start_time else 0
 
-    print(f"[{session.ucid}] Saving call data ({len(session.conversation)} entries, {duration_sec}s)")
+    print(f"[{session.ucid}] 💾 Saving call data ({len(session.conversation)} entries, {duration_sec}s)")
 
     try:
         # Initialize storage and clients
@@ -521,7 +553,7 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
             si_endpoint = agent_config.get("siEndpointUrl")
             si_auth = agent_config.get("siAuthHeader")
             if si_endpoint:
-                print(f"[{session.ucid}] Delivering to SI webhook: {si_endpoint[:50]}...")
+                print(f"[{session.ucid}] 📤 Delivering to SI webhook: {si_endpoint[:50]}...")
                 await admin_client.push_to_si_webhook(
                     payload=si_webhook_payload,
                     endpoint_url=si_endpoint,
@@ -555,7 +587,7 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
                         "agent_id": session.agent,
                         "store_code": session.store_code or "",
                     }
-                print(f"[{session.ucid}] Delivering to Waybeo webhook: {waybeo_endpoint[:50]}...")
+                print(f"[{session.ucid}] 📤 Delivering to Waybeo webhook: {waybeo_endpoint[:50]}...")
                 await admin_client.push_to_waybeo_webhook(
                     payload=waybeo_payload,
                     endpoint_url=waybeo_endpoint,
@@ -564,7 +596,7 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
                 )
 
     except Exception as e:
-        print(f"[{session.ucid}] Error saving call data: {e}")
+        print(f"[{session.ucid}] ❌ Error saving call data: {e}")
 
 
 async def main() -> None:
@@ -574,7 +606,7 @@ async def main() -> None:
 
     # websockets.serve passes (websocket, path) for the legacy API; handler accepts both.
     async with websockets.serve(handle_client, cfg.HOST, cfg.PORT):
-        print(f"Telephony WS listening on ws://{cfg.HOST}:{cfg.PORT}{cfg.WS_PATH}")
+        print(f"✅ Telephony WS listening on ws://{cfg.HOST}:{cfg.PORT}{cfg.WS_PATH}")
         await asyncio.Future()
 
 
@@ -582,4 +614,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nTelephony service stopped")
+        print("\n👋 Telephony service stopped")
+
+
