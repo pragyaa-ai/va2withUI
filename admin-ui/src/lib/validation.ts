@@ -36,16 +36,16 @@ export const createVoiceAgentSchema = z.object({
   language: z.enum(["ENGLISH", "HINDI"]).default("HINDI"),
   voiceName: z.enum(["ANANYA", "PRIYA", "CHITRA", "KAVYA", "FARHAN"]).default("ANANYA"),
   isActive: z.boolean().default(true),
-  systemInstructions: z.string().max(50000).optional(),
+  systemInstructions: z.string().max(50000).nullish(),
   // Payload templates for post-call webhooks (JSON objects)
-  siPayloadTemplate: z.any().optional(),      // SI webhook payload structure
-  waybeoPayloadTemplate: z.any().optional(),  // Waybeo callback payload structure
+  siPayloadTemplate: z.any().nullish(),       // SI webhook payload structure
+  waybeoPayloadTemplate: z.any().nullish(),   // Waybeo callback payload structure
   // Webhook endpoints for post-call payload delivery
-  siCustomerName: z.string().max(100).optional(),                     // SI customer/account name (e.g., "Kia")
-  siEndpointUrl: z.string().url().optional().or(z.literal("")),       // SI webhook URL
-  siAuthHeader: z.string().max(500).optional(),                       // SI Authorization header
-  waybeoEndpointUrl: z.string().url().optional().or(z.literal("")),   // Waybeo callback URL
-  waybeoAuthHeader: z.string().max(500).optional(),                   // Waybeo Authorization header
+  siCustomerName: z.string().max(100).nullish(),                       // SI customer/account name (e.g., "Kia")
+  siEndpointUrl: z.string().url().nullish().or(z.literal("")).or(z.null()),  // SI webhook URL
+  siAuthHeader: z.string().max(500).nullish(),                        // SI Authorization header
+  waybeoEndpointUrl: z.string().url().nullish().or(z.literal("")).or(z.null()),  // Waybeo callback URL
+  waybeoAuthHeader: z.string().max(500).nullish(),                    // Waybeo Authorization header
 });
 
 export type CreateVoiceAgentInput = z.infer<typeof createVoiceAgentSchema>;

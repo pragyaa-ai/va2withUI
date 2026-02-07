@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Card } from "@/components/ui/Card";
 import { VOICE_NAMES, ACCENTS, LANGUAGES, ENGINE_LABELS } from "@/lib/validation";
+import { deriveTemplateFromSample } from "@/lib/samplePayloadDeriver";
 
 // Default SI payload template
 const DEFAULT_SI_TEMPLATE = {
@@ -105,6 +106,7 @@ interface VoiceAgent {
   siPayloadTemplate?: object;
   waybeoPayloadTemplate?: object;
   // Webhook endpoints
+  siCustomerName?: string;
   siEndpointUrl?: string;
   siAuthHeader?: string;
   waybeoEndpointUrl?: string;
@@ -142,6 +144,12 @@ export default function ConfigurationPage() {
   const [siAuthHeader, setSiAuthHeader] = useState("");
   const [waybeoEndpointUrl, setWaybeoEndpointUrl] = useState("");
   const [waybeoAuthHeader, setWaybeoAuthHeader] = useState("");
+  // Sample payload state
+  const [siSamplePayload, setSiSamplePayload] = useState("");
+  const [waybeoSamplePayload, setWaybeoSamplePayload] = useState("");
+  const [siDeriveResult, setSiDeriveResult] = useState<{ mapped: string[]; literal: string[] } | null>(null);
+  const [waybeoDeriveResult, setWaybeoDeriveResult] = useState<{ mapped: string[]; literal: string[] } | null>(null);
+  const [deriveError, setDeriveError] = useState<string | null>(null);
   
   const [activeTab, setActiveTab] = useState<"settings" | "instructions" | "technical" | "si" | "waybeo">("settings");
 
@@ -255,6 +263,30 @@ export default function ConfigurationPage() {
 
   const resetWaybeoTemplate = () => {
     setWaybeoPayloadTemplate(JSON.stringify(DEFAULT_WAYBEO_TEMPLATE, null, 2));
+  };
+
+  const handleDeriveSiTemplate = () => {
+    setDeriveError(null);
+    setSiDeriveResult(null);
+    try {
+      const result = deriveTemplateFromSample(siSamplePayload);
+      setSiPayloadTemplate(JSON.stringify(result.template, null, 2));
+      setSiDeriveResult({ mapped: result.mappedFields, literal: result.literalFields });
+    } catch (e: unknown) {
+      setDeriveError(e instanceof Error ? e.message : "Invalid JSON");
+    }
+  };
+
+  const handleDeriveWaybeoTemplate = () => {
+    setDeriveError(null);
+    setWaybeoDeriveResult(null);
+    try {
+      const result = deriveTemplateFromSample(waybeoSamplePayload);
+      setWaybeoPayloadTemplate(JSON.stringify(result.template, null, 2));
+      setWaybeoDeriveResult({ mapped: result.mappedFields, literal: result.literalFields });
+    } catch (e: unknown) {
+      setDeriveError(e instanceof Error ? e.message : "Invalid JSON");
+    }
   };
 
   if (loading) {
@@ -597,6 +629,50 @@ export default function ConfigurationPage() {
             </div>
           </div>
 
+          {/* Sample Payload Box */}
+          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 space-y-3">
+            <div className="flex items-start justify-between">
+              <div>
+                <h4 className="text-sm font-semibold text-emerald-800">Paste Sample Payload</h4>
+                <p className="text-xs text-emerald-600 mt-0.5">
+                  Paste a real or dummy SI payload with sample values. The system will auto-derive the template
+                  by replacing known values with dynamic placeholders. You can update this anytime to change the format.
+                </p>
+              </div>
+              <Button
+                variant="secondary"
+                onClick={handleDeriveSiTemplate}
+                disabled={!siSamplePayload.trim()}
+                className="text-xs shrink-0 ml-3"
+              >
+                Derive Template
+              </Button>
+            </div>
+            <Textarea
+              value={siSamplePayload}
+              onChange={(e) => { setSiSamplePayload(e.target.value); setSiDeriveResult(null); setDeriveError(null); }}
+              rows={12}
+              placeholder='Paste a sample SI payload JSON here, e.g.:\n{"id":"bot_abc123","customer_name":"Kia","call_ref_id":"abc123","duration":79,...}'
+              className="font-mono text-xs leading-relaxed"
+            />
+            {deriveError && activeTab === "si" && (
+              <div className="bg-red-50 border border-red-200 rounded px-3 py-2 text-xs text-red-700">
+                {deriveError}
+              </div>
+            )}
+            {siDeriveResult && (
+              <div className="bg-emerald-100 border border-emerald-300 rounded px-3 py-2 text-xs text-emerald-800 space-y-1">
+                <div className="font-medium">Template derived successfully</div>
+                <div>{siDeriveResult.mapped.length} fields auto-mapped to dynamic placeholders</div>
+                {siDeriveResult.literal.length > 0 && (
+                  <div className="text-emerald-600">
+                    {siDeriveResult.literal.length} fields kept as literal values: {siDeriveResult.literal.join(", ")}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
             <h4 className="text-sm font-semibold text-blue-800 mb-2">Available Placeholders</h4>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs text-blue-700">
@@ -620,7 +696,12 @@ export default function ConfigurationPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Payload Template</label>
+            <label className="block text-sm font-medium text-slate-700 mb-2">
+              Payload Template
+              <span className="text-xs text-slate-400 font-normal ml-2">
+                (auto-generated from sample or manually editable)
+              </span>
+            </label>
             <Textarea
               value={siPayloadTemplate}
               onChange={(e) => setSiPayloadTemplate(e.target.value)}
@@ -682,6 +763,50 @@ export default function ConfigurationPage() {
             </div>
           </div>
 
+          {/* Sample Payload Box */}
+          <div className="bg-teal-50 border border-teal-200 rounded-lg p-4 space-y-3">
+            <div className="flex items-start justify-between">
+              <div>
+                <h4 className="text-sm font-semibold text-teal-800">Paste Sample Payload</h4>
+                <p className="text-xs text-teal-600 mt-0.5">
+                  Paste a real or dummy Waybeo payload with sample values. The system will auto-derive the template
+                  by replacing known values with dynamic placeholders. You can update this anytime to change the format.
+                </p>
+              </div>
+              <Button
+                variant="secondary"
+                onClick={handleDeriveWaybeoTemplate}
+                disabled={!waybeoSamplePayload.trim()}
+                className="text-xs shrink-0 ml-3"
+              >
+                Derive Template
+              </Button>
+            </div>
+            <Textarea
+              value={waybeoSamplePayload}
+              onChange={(e) => { setWaybeoSamplePayload(e.target.value); setWaybeoDeriveResult(null); setDeriveError(null); }}
+              rows={12}
+              placeholder='Paste a sample Waybeo payload JSON here, e.g.:\n{"call_id":"abc123","agent_name":"Spotlight","duration":79,...}'
+              className="font-mono text-xs leading-relaxed"
+            />
+            {deriveError && activeTab === "waybeo" && (
+              <div className="bg-red-50 border border-red-200 rounded px-3 py-2 text-xs text-red-700">
+                {deriveError}
+              </div>
+            )}
+            {waybeoDeriveResult && (
+              <div className="bg-teal-100 border border-teal-300 rounded px-3 py-2 text-xs text-teal-800 space-y-1">
+                <div className="font-medium">Template derived successfully</div>
+                <div>{waybeoDeriveResult.mapped.length} fields auto-mapped to dynamic placeholders</div>
+                {waybeoDeriveResult.literal.length > 0 && (
+                  <div className="text-teal-600">
+                    {waybeoDeriveResult.literal.length} fields kept as literal values: {waybeoDeriveResult.literal.join(", ")}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="bg-amber-50/50 border border-amber-100 rounded-lg p-4">
             <h4 className="text-sm font-semibold text-amber-800 mb-2">Additional Placeholders</h4>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs text-amber-700">
@@ -695,7 +820,12 @@ export default function ConfigurationPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Payload Template</label>
+            <label className="block text-sm font-medium text-slate-700 mb-2">
+              Payload Template
+              <span className="text-xs text-slate-400 font-normal ml-2">
+                (auto-generated from sample or manually editable)
+              </span>
+            </label>
             <Textarea
               value={waybeoPayloadTemplate}
               onChange={(e) => setWaybeoPayloadTemplate(e.target.value)}
