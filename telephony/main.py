@@ -436,9 +436,8 @@ async def _gemini_reader(
                 # 2. We have less than 3 user turns (not enough conversation)
                 if call_duration < 30 or user_turns < 3:
                     print(f"[{session.ucid}] ⚠️ IGNORED {func_name}() - too early (duration={call_duration:.0f}s, user_turns={user_turns})")
-                    continue
-                
-                if func_name == "transfer_call":
+                    # Don't use continue! Let audio/transcription processing happen below
+                elif func_name == "transfer_call":
                     print(f"[{session.ucid}] 📞 Gemini 2.5 → transfer_call(): {reason}")
                     print(f"[{session.ucid}] ⏳ Waiting for goodbye message before transfer...")
                     session.user_wants_transfer = True
