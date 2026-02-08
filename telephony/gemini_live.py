@@ -49,20 +49,21 @@ CALL_CONTROL_FUNCTIONS = {
     "function_declarations": [
         {
             "name": "transfer_call",
-            "description": """CRITICAL RULES - READ CAREFULLY:
-1. NEVER call this function at the start of a call
-2. NEVER call this function during information collection
-3. NEVER call this function until you have asked ALL questions and collected: name, email, car model, test drive interest
-4. NEVER call this function until AFTER you have confirmed the details with the user
-5. ONLY call this function AFTER you have explicitly asked "Would you like to speak with a sales agent?" AND the user has clearly responded YES
-
-If you are not 100% certain the user wants to speak with an agent AFTER completing the full conversation, DO NOT call this function.""",
+            "description": """Transfer call to human agent. STRICT REQUIREMENTS - ALL must be met:
+- You MUST have already spoken your greeting message
+- You MUST have had at least 5 exchanges with the user
+- You MUST have collected name, email, and car model
+- You MUST have asked about test drive
+- You MUST have confirmed all details with the user
+- You MUST have JUST asked "Would you like to speak with a sales agent?"
+- The user MUST have responded with a clear YES to that specific question
+- If ANY of these conditions is false, DO NOT call this function, just continue the conversation normally""",
             "parameters": {
                 "type": "OBJECT",
                 "properties": {
                     "reason": {
                         "type": "STRING",
-                        "description": "Specific user response that triggered transfer (must quote what user said)"
+                        "description": "Quote the user's exact words that confirm YES to speaking with agent"
                     }
                 },
                 "required": ["reason"]
@@ -70,20 +71,21 @@ If you are not 100% certain the user wants to speak with an agent AFTER completi
         },
         {
             "name": "end_call",
-            "description": """CRITICAL RULES - READ CAREFULLY:
-1. NEVER call this function at the start of a call
-2. NEVER call this function during information collection
-3. NEVER call this function until you have asked ALL questions and collected: name, email, car model, test drive interest
-4. NEVER call this function until AFTER you have confirmed the details with the user
-5. ONLY call this function AFTER you have explicitly asked "Would you like to speak with a sales agent?" AND the user has clearly responded NO
-
-If you are not 100% certain the user wants to end the call AFTER completing the full conversation, DO NOT call this function.""",
+            "description": """End the call gracefully. STRICT REQUIREMENTS - ALL must be met:
+- You MUST have already spoken your greeting message
+- You MUST have had at least 5 exchanges with the user
+- You MUST have collected name, email, and car model (or user refused to provide)
+- You MUST have asked about test drive
+- You MUST have confirmed all details with the user
+- You MUST have JUST asked "Would you like to speak with a sales agent?"
+- The user MUST have responded with a clear NO to that specific question
+- If ANY of these conditions is false, DO NOT call this function, just continue the conversation normally""",
             "parameters": {
                 "type": "OBJECT",
                 "properties": {
                     "reason": {
                         "type": "STRING",
-                        "description": "Specific user response that triggered hangup (must quote what user said)"
+                        "description": "Quote the user's exact words that confirm NO to speaking with agent"
                     }
                 },
                 "required": ["reason"]
