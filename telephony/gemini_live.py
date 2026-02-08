@@ -43,18 +43,19 @@ class GeminiSessionConfig:
 
 
 # Function declarations for Gemini Live 2.5 to call
-# These are triggered by Gemini based on conversation flow
+# IMPORTANT: These should ONLY be called at the END of conversation
+# after asking "Would you like to talk to a sales agent?"
 CALL_CONTROL_FUNCTIONS = {
     "function_declarations": [
         {
             "name": "transfer_call",
-            "description": "Transfer the call to a human sales agent. Call this ONLY when the user explicitly says YES to speaking with a sales agent or dealer representative.",
+            "description": "Transfer the call to a human sales agent. ONLY call this function when ALL of the following are true: (1) You have completed the conversation and collected customer information, (2) You have explicitly asked 'Would you like to speak with a sales agent?' or similar question, (3) The user has clearly said YES they want to talk to a human agent. Do NOT call this at the start of the call or during information collection.",
             "parameters": {
                 "type": "OBJECT",
                 "properties": {
                     "reason": {
                         "type": "STRING",
-                        "description": "Why the user wants to transfer (e.g., 'User wants to speak with sales team')"
+                        "description": "Why transfer is requested (e.g., 'User confirmed they want to speak with sales team')"
                     }
                 },
                 "required": ["reason"]
@@ -62,13 +63,13 @@ CALL_CONTROL_FUNCTIONS = {
         },
         {
             "name": "end_call",
-            "description": "End the call gracefully. Call this when the user says NO to speaking with an agent, or when the conversation is complete and user wants to end the call.",
+            "description": "End the call gracefully. ONLY call this function when ALL of the following are true: (1) You have completed the conversation and collected customer information, (2) You have explicitly asked 'Would you like to speak with a sales agent?' or similar question, (3) The user has clearly said NO they do not want to talk to a human agent, OR the user explicitly wants to end the call. Do NOT call this at the start of the call, during information collection, or if the user has not responded yet.",
             "parameters": {
                 "type": "OBJECT",
                 "properties": {
                     "reason": {
                         "type": "STRING",
-                        "description": "Why the call is ending (e.g., 'User declined agent transfer', 'Conversation complete')"
+                        "description": "Why call is ending (e.g., 'User declined to speak with agent', 'User requested to end call')"
                     }
                 },
                 "required": ["reason"]
