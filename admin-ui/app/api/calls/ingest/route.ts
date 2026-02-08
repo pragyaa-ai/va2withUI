@@ -120,9 +120,9 @@ async function generateSummaryAndSentiment(transcript: TranscriptEntry[], callId
 
     console.log(`[Ingest] ${callId}: Calling Gemini 2.0 Flash for summary (${transcript.length} entries)`);
 
-    // Use Gemini 2.0 Flash API
+    // Use Gemini 1.5 Flash API (stable, widely available)
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
