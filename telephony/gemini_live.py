@@ -43,19 +43,26 @@ class GeminiSessionConfig:
 
 
 # Function declarations for Gemini Live 2.5 to call
-# IMPORTANT: These should ONLY be called at the END of conversation
-# after asking "Would you like to talk to a sales agent?"
+# CRITICAL: These should ONLY be called at the VERY END of conversation
+# NEVER at the start, NEVER during info collection, ONLY after transfer question
 CALL_CONTROL_FUNCTIONS = {
     "function_declarations": [
         {
             "name": "transfer_call",
-            "description": "Transfer the call to a human sales agent. ONLY call this function when ALL of the following are true: (1) You have completed the conversation and collected customer information, (2) You have explicitly asked 'Would you like to speak with a sales agent?' or similar question, (3) The user has clearly said YES they want to talk to a human agent. Do NOT call this at the start of the call or during information collection.",
+            "description": """CRITICAL RULES - READ CAREFULLY:
+1. NEVER call this function at the start of a call
+2. NEVER call this function during information collection
+3. NEVER call this function until you have asked ALL questions and collected: name, email, car model, test drive interest
+4. NEVER call this function until AFTER you have confirmed the details with the user
+5. ONLY call this function AFTER you have explicitly asked "Would you like to speak with a sales agent?" AND the user has clearly responded YES
+
+If you are not 100% certain the user wants to speak with an agent AFTER completing the full conversation, DO NOT call this function.""",
             "parameters": {
                 "type": "OBJECT",
                 "properties": {
                     "reason": {
                         "type": "STRING",
-                        "description": "Why transfer is requested (e.g., 'User confirmed they want to speak with sales team')"
+                        "description": "Specific user response that triggered transfer (must quote what user said)"
                     }
                 },
                 "required": ["reason"]
@@ -63,13 +70,20 @@ CALL_CONTROL_FUNCTIONS = {
         },
         {
             "name": "end_call",
-            "description": "End the call gracefully. ONLY call this function when ALL of the following are true: (1) You have completed the conversation and collected customer information, (2) You have explicitly asked 'Would you like to speak with a sales agent?' or similar question, (3) The user has clearly said NO they do not want to talk to a human agent, OR the user explicitly wants to end the call. Do NOT call this at the start of the call, during information collection, or if the user has not responded yet.",
+            "description": """CRITICAL RULES - READ CAREFULLY:
+1. NEVER call this function at the start of a call
+2. NEVER call this function during information collection
+3. NEVER call this function until you have asked ALL questions and collected: name, email, car model, test drive interest
+4. NEVER call this function until AFTER you have confirmed the details with the user
+5. ONLY call this function AFTER you have explicitly asked "Would you like to speak with a sales agent?" AND the user has clearly responded NO
+
+If you are not 100% certain the user wants to end the call AFTER completing the full conversation, DO NOT call this function.""",
             "parameters": {
                 "type": "OBJECT",
                 "properties": {
                     "reason": {
                         "type": "STRING",
-                        "description": "Why call is ending (e.g., 'User declined to speak with agent', 'User requested to end call')"
+                        "description": "Specific user response that triggered hangup (must quote what user said)"
                     }
                 },
                 "required": ["reason"]

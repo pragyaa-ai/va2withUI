@@ -55,6 +55,7 @@ class TelephonySession:
     # Transcript capture
     conversation: List[Dict[str, Any]] = field(default_factory=list)
     start_time: Optional[datetime] = None
+    call_start_time: float = field(default_factory=time.time)  # For safeguard timing
     customer_number: Optional[str] = None
     store_code: Optional[str] = None
     # Transfer/hangup state (set by Gemini 2.5 Live function calls)
@@ -417,12 +418,24 @@ async def _gemini_reader(
             # Handle Gemini 2.5 Live function calls (transfer/hangup)
             # Note: We set the flag but DON'T hangup yet - wait for turnComplete
             # so Gemini can finish saying goodbye first
+            # SAFEGUARD: Ignore function calls that happen too early
             # ─────────────────────────────────────────────────────────────────
             func_call = _extract_function_call(msg)
             if func_call and not session.hangup_sent and not session.call_ending:
                 func_name = func_call.get("name")
                 func_args = func_call.get("args", {})
                 reason = func_args.get("reason", "User decision")
+                
+                # SAFEGUARD: Count user turns in conversation to prevent early triggers
+                user_turns = sum(1 for c in session.conversation if c.get("speaker") == "user")
+                call_duration = time.time() - session.call_start_time
+                
+                # Ignore function calls if:
+                # 1. Call is less than 30 seconds old, OR
+                # 2. We have less than 3 user turns (not enough conversation)
+                if call_duration < 30 or user_turns < 3:
+                    print(f"[{session.ucid}] ⚠️ IGNORED {func_name}() - too early (duration={call_duration:.0f}s, user_turns={user_turns})")
+                    continue
                 
                 if func_name == "transfer_call":
                     print(f"[{session.ucid}] 📞 Gemini 2.5 → transfer_call(): {reason}")
