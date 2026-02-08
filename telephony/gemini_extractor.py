@@ -17,27 +17,34 @@ from urllib.error import HTTPError, URLError
 EXTRACTION_PROMPT = """You are an AI assistant that extracts structured data from voice call transcripts.
 
 Analyze the following conversation transcript and extract the requested information.
-The conversation is between a voice agent and a customer inquiring about cars/vehicles.
+The conversation is between a voice AGENT and a CUSTOMER (user) inquiring about cars/vehicles.
 
 TRANSCRIPT:
 {transcript}
 
 EXTRACT THE FOLLOWING DATA:
-1. name - Customer's full name (if mentioned)
+1. name - Customer's full name
 2. model - Car model they are interested in (e.g., Seltos, EV9, Sonet, Nexon, etc.)
-3. email - Customer's email address (if provided)
-4. test_drive - Whether they want a test drive (yes/no/not mentioned)
-5. phone - Customer's phone number (if mentioned)
-6. location - Customer's city or location (if mentioned)
+3. email - Customer's email address
+4. test_drive - Whether they want a test drive (yes/no)
+5. phone - Customer's phone number
+6. location - Customer's city or location
 
-IMPORTANT RULES:
-- Extract EXACTLY what was said, don't infer or guess
-- For names: Look for phrases like "my name is", "I am", "mera naam", "this is"
-- For car models: Look for specific model names mentioned
-- For email: Extract the exact email address if spelled out
-- For test_drive: Look for "yes", "haan", "ji", "sure" or "no", "nahi", "not now"
-- If something was NOT mentioned or unclear, use null
+CRITICAL EXTRACTION RULES:
+- PRIORITIZE AGENT CONFIRMATIONS: The agent often corrects and confirms what the user said.
+  When the agent says "So your name is Rohit, correct?" or "I'll note your email as rohit@gmail.com" - USE THE AGENT'S VERSION.
+- Agent speech is more accurate than raw user speech (which may have transcription errors)
+- For names: Look for agent confirmations like "your name is [X]", "thank you [X]", "[X] ji"
+- For car models: Agent often confirms like "you're interested in [Model]", "for the [Model]"
+- For email: Agent spells back the email for confirmation - USE THAT VERSION
+- For test_drive: Look for user's "yes/haan/ji" or "no/nahi" responses, or agent confirmation
+- If data is NOT mentioned or unclear even after checking agent speech, use null
 - Respond ONLY with valid JSON, no explanations
+
+EXAMPLE:
+User: "mera naam ro... hit hai" (transcription error)
+Agent: "Thank you Rohit ji, aap Seltos mein interested hain?"
+→ Extract name as "Rohit" (from agent's clearer speech)
 
 RESPONSE FORMAT (strict JSON):
 {{

@@ -57,6 +57,72 @@ class TelephonySession:
     start_time: Optional[datetime] = None
     customer_number: Optional[str] = None
     store_code: Optional[str] = None
+    # Transfer/hangup state
+    transfer_requested: bool = False
+    transfer_number: Optional[str] = None
+    last_user_activity: Optional[datetime] = None
+    silence_reprompt_count: int = 0
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Telephony Control Events (Waybeo/Ozonetel)
+# ────────────────────────────────────────────────────────────────────────────
+
+async def send_transfer_event(session: TelephonySession, transfer_number: str, cfg: "Config") -> bool:
+    """
+    Send transfer event to telephony provider (Waybeo).
+    
+    Args:
+        session: Current telephony session
+        transfer_number: Phone number to transfer to (dealer)
+        cfg: Config instance
+        
+    Returns:
+        True if event sent successfully
+    """
+    try:
+        transfer_payload = {
+            "event": "transfer",
+            "ucid": session.ucid,
+            "phone": transfer_number,
+            "reason": "Customer requested transfer to dealer",
+        }
+        await session.client_ws.send(json.dumps(transfer_payload))
+        session.transfer_requested = True
+        session.transfer_number = transfer_number
+        print(f"[{session.ucid}] 📞 Transfer event sent → {transfer_number}")
+        return True
+    except Exception as e:
+        if cfg.DEBUG:
+            print(f"[{session.ucid}] ❌ Failed to send transfer event: {e}")
+        return False
+
+
+async def send_hangup_event(session: TelephonySession, cfg: "Config", reason: str = "Call completed") -> bool:
+    """
+    Send hangup event to telephony provider (Waybeo).
+    
+    Args:
+        session: Current telephony session
+        cfg: Config instance
+        reason: Reason for hangup
+        
+    Returns:
+        True if event sent successfully
+    """
+    try:
+        hangup_payload = {
+            "event": "hangup",
+            "ucid": session.ucid,
+            "reason": reason,
+        }
+        await session.client_ws.send(json.dumps(hangup_payload))
+        print(f"[{session.ucid}] 📞 Hangup event sent: {reason}")
+        return True
+    except Exception as e:
+        if cfg.DEBUG:
+            print(f"[{session.ucid}] ❌ Failed to send hangup event: {e}")
+        return False
 
 
 # Supported agents and their prompt files (fallback if API unavailable)
@@ -146,12 +212,15 @@ def _extract_transcription(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Extract transcription text from Gemini message.
     
-    Input transcription: serverContent.inputTranscription.text
-    Output transcription: serverContent.modelTurn.parts[].text
+    Input transcription: serverContent.inputTranscription.text (user speech)
+    Output transcription: serverContent.outputTranscription.text (agent speech)
+    
+    IMPORTANT: Agent speech contains corrected/confirmed data that should be
+    used for extraction, as the agent confirms and corrects user input.
     """
     server_content = msg.get("serverContent", {})
     
-    # Input transcription (user speech)
+    # Input transcription (user speech - raw, may have errors)
     input_trans = server_content.get("inputTranscription", {})
     if input_trans and input_trans.get("text"):
         return {
@@ -160,13 +229,22 @@ def _extract_transcription(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
     
-    # Output transcription (model speech) - from modelTurn parts with text
+    # Output transcription (agent speech - contains confirmed/corrected data)
+    output_trans = server_content.get("outputTranscription", {})
+    if output_trans and output_trans.get("text"):
+        return {
+            "speaker": "agent",
+            "text": output_trans["text"],
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+    
+    # Fallback: Check modelTurn for text parts (older API format)
     model_turn = server_content.get("modelTurn", {})
     parts = model_turn.get("parts", [])
     for part in parts:
         if isinstance(part, dict) and part.get("text"):
             return {
-                "speaker": "assistant",
+                "speaker": "agent",
                 "text": part["text"],
                 "timestamp": datetime.utcnow().isoformat() + "Z",
             }
