@@ -115,6 +115,17 @@ interface VoiceAgent {
   updatedAt: string;
 }
 
+interface WebhookTestResult {
+  success: boolean;
+  status?: number;
+  statusText?: string;
+  duration?: number;
+  error?: string;
+  responseBody?: unknown;
+  requestPayload?: unknown;
+  curlCommand?: string;
+}
+
 export default function ConfigurationPage() {
   const params = useParams();
   const [loading, setLoading] = useState(true);
@@ -147,9 +158,14 @@ export default function ConfigurationPage() {
   // Sample payload state
   const [siSamplePayload, setSiSamplePayload] = useState("");
   const [waybeoSamplePayload, setWaybeoSamplePayload] = useState("");
-  const [siDeriveResult, setSiDeriveResult] = useState<{ mapped: string[]; literal: string[] } | null>(null);
-  const [waybeoDeriveResult, setWaybeoDeriveResult] = useState<{ mapped: string[]; literal: string[] } | null>(null);
+  const [siDeriveResult, setSiDeriveResult] = useState<{ mapped: string[]; literal: string[]; autoFixes: string[] } | null>(null);
+  const [waybeoDeriveResult, setWaybeoDeriveResult] = useState<{ mapped: string[]; literal: string[]; autoFixes: string[] } | null>(null);
   const [deriveError, setDeriveError] = useState<string | null>(null);
+  // Test webhook state
+  const [siTestLoading, setSiTestLoading] = useState(false);
+  const [waybeoTestLoading, setWaybeoTestLoading] = useState(false);
+  const [siTestResult, setSiTestResult] = useState<WebhookTestResult | null>(null);
+  const [waybeoTestResult, setWaybeoTestResult] = useState<WebhookTestResult | null>(null);
   
   const [activeTab, setActiveTab] = useState<"settings" | "instructions" | "technical" | "si" | "waybeo">("settings");
 
@@ -271,7 +287,11 @@ export default function ConfigurationPage() {
     try {
       const result = deriveTemplateFromSample(siSamplePayload);
       setSiPayloadTemplate(JSON.stringify(result.template, null, 2));
-      setSiDeriveResult({ mapped: result.mappedFields, literal: result.literalFields });
+      setSiDeriveResult({ 
+        mapped: result.mappedFields, 
+        literal: result.literalFields,
+        autoFixes: result.autoFixes || []
+      });
     } catch (e: unknown) {
       setDeriveError(e instanceof Error ? e.message : "Invalid JSON");
     }
@@ -283,9 +303,95 @@ export default function ConfigurationPage() {
     try {
       const result = deriveTemplateFromSample(waybeoSamplePayload);
       setWaybeoPayloadTemplate(JSON.stringify(result.template, null, 2));
-      setWaybeoDeriveResult({ mapped: result.mappedFields, literal: result.literalFields });
+      setWaybeoDeriveResult({ 
+        mapped: result.mappedFields, 
+        literal: result.literalFields,
+        autoFixes: result.autoFixes || []
+      });
     } catch (e: unknown) {
       setDeriveError(e instanceof Error ? e.message : "Invalid JSON");
+    }
+  };
+
+  const handleTestSiWebhook = async () => {
+    if (!siEndpointUrl) {
+      setSiTestResult({ success: false, error: "Please enter an SI Endpoint URL first" });
+      return;
+    }
+
+    let payload;
+    try {
+      payload = JSON.parse(siPayloadTemplate);
+    } catch {
+      setSiTestResult({ success: false, error: "Invalid JSON in payload template" });
+      return;
+    }
+
+    setSiTestLoading(true);
+    setSiTestResult(null);
+
+    try {
+      const response = await fetch(`/api/voiceagents/${params.id}/test-webhook`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          webhookType: "si",
+          endpointUrl: siEndpointUrl,
+          authHeader: siAuthHeader || undefined,
+          payload,
+          customerName: siCustomerName || form.name,
+        }),
+      });
+      const result = await response.json();
+      setSiTestResult(result);
+    } catch (e) {
+      setSiTestResult({ 
+        success: false, 
+        error: e instanceof Error ? e.message : "Failed to test webhook" 
+      });
+    } finally {
+      setSiTestLoading(false);
+    }
+  };
+
+  const handleTestWaybeoWebhook = async () => {
+    if (!waybeoEndpointUrl) {
+      setWaybeoTestResult({ success: false, error: "Please enter a Waybeo Endpoint URL first" });
+      return;
+    }
+
+    let payload;
+    try {
+      payload = JSON.parse(waybeoPayloadTemplate);
+    } catch {
+      setWaybeoTestResult({ success: false, error: "Invalid JSON in payload template" });
+      return;
+    }
+
+    setWaybeoTestLoading(true);
+    setWaybeoTestResult(null);
+
+    try {
+      const response = await fetch(`/api/voiceagents/${params.id}/test-webhook`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          webhookType: "waybeo",
+          endpointUrl: waybeoEndpointUrl,
+          authHeader: waybeoAuthHeader || undefined,
+          payload,
+          customerName: siCustomerName || form.name,
+        }),
+      });
+      const result = await response.json();
+      setWaybeoTestResult(result);
+    } catch (e) {
+      setWaybeoTestResult({ 
+        success: false, 
+        error: e instanceof Error ? e.message : "Failed to test webhook" 
+      });
+    } finally {
+      setWaybeoTestLoading(false);
     }
   };
 
@@ -582,7 +688,17 @@ export default function ConfigurationPage() {
 
           {/* Webhook Endpoint Configuration */}
           <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4 space-y-4">
-            <h4 className="text-sm font-semibold text-indigo-800">Webhook Configuration</h4>
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold text-indigo-800">Webhook Configuration</h4>
+              <Button
+                variant="secondary"
+                onClick={handleTestSiWebhook}
+                disabled={siTestLoading || !siEndpointUrl}
+                className="text-xs"
+              >
+                {siTestLoading ? "Testing..." : "🧪 Test Webhook"}
+              </Button>
+            </div>
             <div className="grid gap-4 md:grid-cols-3">
               <div>
                 <label className="block text-xs font-medium text-indigo-700 mb-1">
@@ -627,6 +743,55 @@ export default function ConfigurationPage() {
                 </p>
               </div>
             </div>
+
+            {/* Test Result */}
+            {siTestResult && (
+              <div className={`rounded-lg p-4 space-y-3 ${
+                siTestResult.success 
+                  ? "bg-emerald-50 border border-emerald-200" 
+                  : "bg-red-50 border border-red-200"
+              }`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-lg ${siTestResult.success ? "text-emerald-600" : "text-red-600"}`}>
+                      {siTestResult.success ? "✅" : "❌"}
+                    </span>
+                    <span className={`font-semibold text-sm ${siTestResult.success ? "text-emerald-800" : "text-red-800"}`}>
+                      {siTestResult.success 
+                        ? `Success: ${siTestResult.status} ${siTestResult.statusText}`
+                        : `Failed: ${siTestResult.error || `${siTestResult.status} ${siTestResult.statusText}`}`
+                      }
+                    </span>
+                  </div>
+                  {siTestResult.duration && (
+                    <span className="text-xs text-slate-500">{siTestResult.duration}ms</span>
+                  )}
+                </div>
+
+                {siTestResult.responseBody !== undefined && siTestResult.responseBody !== null && (
+                  <div>
+                    <div className="text-xs font-medium text-slate-600 mb-1">Response:</div>
+                    <pre className="bg-white rounded p-2 text-xs overflow-auto max-h-32 border">
+                      {typeof siTestResult.responseBody === "string" 
+                        ? siTestResult.responseBody 
+                        : JSON.stringify(siTestResult.responseBody, null, 2)
+                      }
+                    </pre>
+                  </div>
+                )}
+
+                {siTestResult.curlCommand && (
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-slate-600 hover:text-slate-800">
+                      View cURL command
+                    </summary>
+                    <pre className="mt-2 bg-slate-800 text-slate-100 rounded p-3 overflow-auto text-xs">
+                      {siTestResult.curlCommand}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Sample Payload Box */}
@@ -663,6 +828,11 @@ export default function ConfigurationPage() {
             {siDeriveResult && (
               <div className="bg-emerald-100 border border-emerald-300 rounded px-3 py-2 text-xs text-emerald-800 space-y-1">
                 <div className="font-medium">Template derived successfully</div>
+                {siDeriveResult.autoFixes.length > 0 && (
+                  <div className="text-blue-700 bg-blue-50 px-2 py-1 rounded">
+                    ✨ Auto-corrected: {siDeriveResult.autoFixes.join(", ")}
+                  </div>
+                )}
                 <div>{siDeriveResult.mapped.length} fields auto-mapped to dynamic placeholders</div>
                 {siDeriveResult.literal.length > 0 && (
                   <div className="text-emerald-600">
@@ -730,7 +900,17 @@ export default function ConfigurationPage() {
 
           {/* Webhook Endpoint Configuration */}
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-4">
-            <h4 className="text-sm font-semibold text-amber-800">Webhook Endpoint</h4>
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold text-amber-800">Webhook Endpoint</h4>
+              <Button
+                variant="secondary"
+                onClick={handleTestWaybeoWebhook}
+                disabled={waybeoTestLoading || !waybeoEndpointUrl}
+                className="text-xs"
+              >
+                {waybeoTestLoading ? "Testing..." : "🧪 Test Webhook"}
+              </Button>
+            </div>
             <div className="grid gap-4 md:grid-cols-2">
               <div>
                 <label className="block text-xs font-medium text-amber-700 mb-1">
@@ -761,6 +941,55 @@ export default function ConfigurationPage() {
                 </p>
               </div>
             </div>
+
+            {/* Test Result */}
+            {waybeoTestResult && (
+              <div className={`rounded-lg p-4 space-y-3 ${
+                waybeoTestResult.success 
+                  ? "bg-emerald-50 border border-emerald-200" 
+                  : "bg-red-50 border border-red-200"
+              }`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-lg ${waybeoTestResult.success ? "text-emerald-600" : "text-red-600"}`}>
+                      {waybeoTestResult.success ? "✅" : "❌"}
+                    </span>
+                    <span className={`font-semibold text-sm ${waybeoTestResult.success ? "text-emerald-800" : "text-red-800"}`}>
+                      {waybeoTestResult.success 
+                        ? `Success: ${waybeoTestResult.status} ${waybeoTestResult.statusText}`
+                        : `Failed: ${waybeoTestResult.error || `${waybeoTestResult.status} ${waybeoTestResult.statusText}`}`
+                      }
+                    </span>
+                  </div>
+                  {waybeoTestResult.duration && (
+                    <span className="text-xs text-slate-500">{waybeoTestResult.duration}ms</span>
+                  )}
+                </div>
+
+                {waybeoTestResult.responseBody !== undefined && waybeoTestResult.responseBody !== null && (
+                  <div>
+                    <div className="text-xs font-medium text-slate-600 mb-1">Response:</div>
+                    <pre className="bg-white rounded p-2 text-xs overflow-auto max-h-32 border">
+                      {typeof waybeoTestResult.responseBody === "string" 
+                        ? waybeoTestResult.responseBody 
+                        : JSON.stringify(waybeoTestResult.responseBody, null, 2)
+                      }
+                    </pre>
+                  </div>
+                )}
+
+                {waybeoTestResult.curlCommand && (
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-slate-600 hover:text-slate-800">
+                      View cURL command
+                    </summary>
+                    <pre className="mt-2 bg-slate-800 text-slate-100 rounded p-3 overflow-auto text-xs">
+                      {waybeoTestResult.curlCommand}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Sample Payload Box */}
@@ -797,6 +1026,11 @@ export default function ConfigurationPage() {
             {waybeoDeriveResult && (
               <div className="bg-teal-100 border border-teal-300 rounded px-3 py-2 text-xs text-teal-800 space-y-1">
                 <div className="font-medium">Template derived successfully</div>
+                {waybeoDeriveResult.autoFixes.length > 0 && (
+                  <div className="text-blue-700 bg-blue-50 px-2 py-1 rounded">
+                    ✨ Auto-corrected: {waybeoDeriveResult.autoFixes.join(", ")}
+                  </div>
+                )}
                 <div>{waybeoDeriveResult.mapped.length} fields auto-mapped to dynamic placeholders</div>
                 {waybeoDeriveResult.literal.length > 0 && (
                   <div className="text-teal-600">

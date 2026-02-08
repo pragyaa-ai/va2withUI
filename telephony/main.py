@@ -36,6 +36,11 @@ from data_storage import AgentDataStorage
 from payload_builder import SIPayloadBuilder
 from payload_template_renderer import render_payload_template
 from admin_client import AdminClient
+from gemini_extractor import (
+    GeminiExtractor,
+    build_response_data_from_extraction,
+    build_extracted_map,
+)
 
 
 @dataclass
@@ -562,9 +567,30 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
         transcript_end = _parse_iso_datetime(transcript_metadata.get("end_time"))
         transcript_duration = transcript_metadata.get("duration_sec") or duration_sec
 
-        response_data = payload_builder.extract_response_data(transcript_conversation)
+        # Use Gemini 2.0 Flash for intelligent data extraction (no regex)
+        cfg_instance = Config()
+        if cfg_instance.GEMINI_API_KEY:
+            print(f"[{session.ucid}] 🤖 Using Gemini 2.0 Flash for intelligent extraction...")
+            extractor = GeminiExtractor(
+                api_key=cfg_instance.GEMINI_API_KEY,
+                model=cfg_instance.GEMINI_EXTRACT_MODEL,
+            )
+            gemini_extracted = await extractor.extract_data(
+                conversation=transcript_conversation,
+                agent_context=f"Agent: {session.agent}, Customer type: automotive",
+            )
+            response_data = build_response_data_from_extraction(
+                gemini_extracted, transcript_conversation
+            )
+            extracted_data = build_extracted_map(response_data)
+            print(f"[{session.ucid}] ✅ Gemini extraction complete: {gemini_extracted.get('extraction_notes', 'OK')}")
+        else:
+            # Fallback to regex extraction if no API key (not recommended)
+            print(f"[{session.ucid}] ⚠️ No GEMINI_API_KEY, falling back to regex extraction")
+            response_data = payload_builder.extract_response_data(transcript_conversation)
+            extracted_data = payload_builder.build_extracted_map(response_data)
+
         completion_status = payload_builder.determine_completion_status(response_data)
-        extracted_data = payload_builder.build_extracted_map(response_data)
 
         transcript_text = "\n".join(
             f"[{entry.get('timestamp')}] {entry.get('speaker', '').upper()}: {entry.get('text', '')}"
@@ -582,76 +608,86 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
             "assistant_messages": assistant_messages,
         }
 
-        # Build Admin UI payload (internal format)
-        si_payload = payload_builder.build_payload(
-            conversation=transcript_conversation,
-            start_time=transcript_start or session.start_time,
-            end_time=transcript_end or end_time,
-            duration_sec=transcript_duration,
-        )
+        # Build template context for rendering payloads
+        customer_name = payload_builder.customer_name
+        si_template = None
+        waybeo_template = None
+        
+        if agent_config:
+            si_template = agent_config.get("siPayloadTemplate")
+            waybeo_template = agent_config.get("waybeoPayloadTemplate")
+            customer_name = agent_config.get("siCustomerName") or customer_name
 
+        # Detect language from conversation (check if mostly Hindi or English)
+        detected_language = "hindi"  # default
+        english_count = 0
+        hindi_markers = ["ji", "haan", "nahi", "aap", "hai", "mein", "kya", "naam"]
+        for entry in transcript_conversation:
+            text_lower = (entry.get("text") or "").lower()
+            # Count entries with common English words and no Hindi markers
+            if any(w in text_lower for w in ["yes", "no", "please", "thank", "want", "interested"]):
+                if not any(w in text_lower for w in hindi_markers):
+                    english_count += 1
+        if english_count > len(transcript_conversation) * 0.3:
+            detected_language = "english"
+
+        # Build template context with all available data
+        template_context = {
+            "call_id": session.ucid,
+            "agent_slug": session.agent,
+            "agent_name": agent_config.get("name") if agent_config else session.agent,
+            "customer_name": customer_name,
+            "store_code": session.store_code or "",
+            "customer_number": session.customer_number or "",
+            "start_time": (transcript_start or session.start_time or end_time).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+            "end_time": (transcript_end or end_time).strftime("%Y-%m-%d %H:%M:%S"),
+            "duration_sec": transcript_duration,
+            "completion_status": completion_status,
+            "detected_language": detected_language,
+            "transfer_status": "not_transferred",
+            "transfer_reason": "User decided",
+            "response_data": response_data,
+            "transcript": transcript_conversation,
+            "transcript_text": transcript_text,
+            "extracted": extracted_data,
+            "analytics": analytics,
+        }
+
+        # Build SI payload - use template if available, otherwise use hardcoded builder
+        if si_template:
+            rendered_si = render_payload_template(si_template, template_context)
+            if rendered_si.missing_placeholders:
+                print(
+                    f"[{session.ucid}] ⚠️ SI template missing values for: "
+                    f"{', '.join(rendered_si.missing_placeholders)}"
+                )
+            si_payload = rendered_si.payload
+        else:
+            # Fallback to hardcoded payload builder
+            si_payload = payload_builder.build_payload(
+                conversation=transcript_conversation,
+                start_time=transcript_start or session.start_time,
+                end_time=transcript_end or end_time,
+                duration_sec=transcript_duration,
+            )
+
+        # IMPORTANT: Always inject agent_slug for Admin UI VoiceAgent lookup
+        # This ensures calls are linked to the correct VoiceAgent even if
+        # the template doesn't include agent_slug
+        if isinstance(si_payload, dict):
+            si_payload["agent_slug"] = session.agent
+
+        # Save SI payload to local file
         storage.save_si_payload(session.ucid, si_payload)
 
-        # Push to Admin UI database
+        # Push to Admin UI database - this is what shows in Raw Payload
         await admin_client.push_call_data(si_payload, session.ucid)
 
         # Deliver to external webhooks if configured
         if agent_config:
-            si_template = agent_config.get("siPayloadTemplate")
-            waybeo_template = agent_config.get("waybeoPayloadTemplate")
-            customer_name = agent_config.get("siCustomerName") or payload_builder.customer_name
-
-            # Detect language from conversation (check if mostly Hindi or English)
-            detected_language = "hindi"  # default
-            english_count = 0
-            hindi_markers = ["ji", "haan", "nahi", "aap", "hai", "mein", "kya", "naam"]
-            for entry in transcript_conversation:
-                text_lower = (entry.get("text") or "").lower()
-                # Count entries with common English words and no Hindi markers
-                if any(w in text_lower for w in ["yes", "no", "please", "thank", "want", "interested"]):
-                    if not any(w in text_lower for w in hindi_markers):
-                        english_count += 1
-            if english_count > len(transcript_conversation) * 0.3:
-                detected_language = "english"
-
-            # Determine transfer status from dealer_routing in SI payload
-            dealer_routing = si_payload.get("dealer_routing", {})
-            transfer_status = "transferred" if dealer_routing.get("status") else "not_transferred"
-            transfer_reason = dealer_routing.get("reason", "User decided")
-
-            template_context = {
-                "call_id": session.ucid,
-                "agent_slug": session.agent,
-                "agent_name": agent_config.get("name") if agent_config else session.agent,
-                "customer_name": customer_name,
-                "store_code": session.store_code or "",
-                "customer_number": session.customer_number or "",
-                "start_time": (transcript_start or session.start_time or end_time).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                ),
-                "end_time": (transcript_end or end_time).strftime("%Y-%m-%d %H:%M:%S"),
-                "duration_sec": transcript_duration,
-                "completion_status": completion_status,
-                "detected_language": detected_language,
-                "transfer_status": transfer_status,
-                "transfer_reason": transfer_reason,
-                "response_data": response_data,
-                "transcript": transcript_conversation,
-                "transcript_text": transcript_text,
-                "extracted": extracted_data,
-                "analytics": analytics,
-            }
-
-            if si_template:
-                rendered_si = render_payload_template(si_template, template_context)
-                if rendered_si.missing_placeholders:
-                    print(
-                        f"[{session.ucid}] ⚠️ SI template missing values for: "
-                        f"{', '.join(rendered_si.missing_placeholders)}"
-                    )
-                si_webhook_payload = rendered_si.payload
-            else:
-                si_webhook_payload = si_payload
+            si_webhook_payload = si_payload  # Same payload that was saved to DB
 
             # SI webhook
             si_endpoint = agent_config.get("siEndpointUrl")

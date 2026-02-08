@@ -16,6 +16,29 @@ from typing import Any, Dict, Optional
 from config import Config
 
 
+def normalize_auth_header(auth_header: str) -> str:
+    """
+    Normalize authorization header - auto-add 'Bearer ' prefix if missing.
+    
+    Args:
+        auth_header: Raw auth header value
+        
+    Returns:
+        Normalized auth header with proper scheme prefix
+    """
+    trimmed = auth_header.strip()
+    
+    # Check if it already has a known auth scheme prefix
+    known_schemes = ["bearer ", "basic ", "token ", "api-key ", "apikey "]
+    has_scheme = any(trimmed.lower().startswith(scheme) for scheme in known_schemes)
+    
+    if has_scheme:
+        return trimmed
+    
+    # Auto-add Bearer prefix
+    return f"Bearer {trimmed}"
+
+
 class AdminClient:
     """Async client for Admin UI API and webhook delivery."""
 
@@ -216,9 +239,10 @@ class AdminClient:
                     },
                 )
                 
-                # Add authorization header if provided
+                # Add authorization header if provided (auto-add Bearer prefix if missing)
                 if auth_header:
-                    req.add_header("Authorization", auth_header)
+                    normalized_auth = normalize_auth_header(auth_header)
+                    req.add_header("Authorization", normalized_auth)
                 
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     if resp.status in (200, 201, 202):

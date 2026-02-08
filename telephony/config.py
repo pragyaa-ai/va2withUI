@@ -49,13 +49,17 @@ class Config:
 
     # Buffers (ms) - smaller = lower latency, larger = more stable
     AUDIO_BUFFER_MS_INPUT: int = int(os.getenv("AUDIO_BUFFER_MS_INPUT", "100"))
-    AUDIO_BUFFER_MS_OUTPUT: int = int(os.getenv("AUDIO_BUFFER_MS_OUTPUT", "100"))  # 100ms: stable audio + drip-feed keeps barge-in tight
+    AUDIO_BUFFER_MS_OUTPUT: int = int(os.getenv("AUDIO_BUFFER_MS_OUTPUT", "100"))
 
     # Data Storage
     DATA_BASE_DIR: str = os.getenv("DATA_BASE_DIR", "/data")
     ADMIN_API_BASE: str = os.getenv("ADMIN_API_BASE", "http://127.0.0.1:3100")
     ENABLE_DATA_STORAGE: bool = _env_bool("ENABLE_DATA_STORAGE", True)
     ENABLE_ADMIN_PUSH: bool = _env_bool("ENABLE_ADMIN_PUSH", True)
+
+    # Gemini API for intelligent data extraction (uses Gemini 2.0 Flash)
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_EXTRACT_MODEL: str = os.getenv("GEMINI_EXTRACT_MODEL", "gemini-2.0-flash")
 
     @property
     def AUDIO_BUFFER_SAMPLES_INPUT(self) -> int:
@@ -82,45 +86,36 @@ class Config:
 
     def print_config(self) -> None:
         print("=" * 68)
-        print("📞 VoiceAgent Telephony (Gemini Live) – Configuration")
+        print("VoiceAgent Telephony (Gemini Live) - Configuration")
         print("=" * 68)
-        print(f"🌐 Server: ws://{self.HOST}:{self.PORT}{self.WS_PATH}")
-        print(f"🧠 Gemini model: {self.GEMINI_MODEL}")
-        print(f"🎙️  Voice: {self.GEMINI_VOICE}")
-        print(f"📍 Location: {self.GEMINI_LOCATION}")
-        print(f"🏷️  Project: {self.GCP_PROJECT_ID}")
+        print(f"Server: ws://{self.HOST}:{self.PORT}{self.WS_PATH}")
+        print(f"Gemini model: {self.GEMINI_MODEL}")
+        print(f"Voice: {self.GEMINI_VOICE}")
+        print(f"Location: {self.GEMINI_LOCATION}")
+        print(f"Project: {self.GCP_PROJECT_ID}")
         print(
-            f"🎵 Audio SR: telephony={self.TELEPHONY_SR}Hz, "
+            f"Audio SR: telephony={self.TELEPHONY_SR}Hz, "
             f"gemini_in={self.GEMINI_INPUT_SR}Hz, gemini_out={self.GEMINI_OUTPUT_SR}Hz"
         )
         print(
-            f"🎵 Buffers: in={self.AUDIO_BUFFER_MS_INPUT}ms "
+            f"Buffers: in={self.AUDIO_BUFFER_MS_INPUT}ms "
             f"({self.AUDIO_BUFFER_SAMPLES_INPUT} samples), "
             f"out={self.AUDIO_BUFFER_MS_OUTPUT}ms "
             f"({self.AUDIO_BUFFER_SAMPLES_OUTPUT} samples)"
         )
-        print(f"📁 Data dir: {self.DATA_BASE_DIR}")
-        print(f"🔄 Data storage: {'✅' if self.ENABLE_DATA_STORAGE else '❌'}")
-        print(f"📤 Admin push: {'✅' if self.ENABLE_ADMIN_PUSH else '❌'}")
-        print(f"🐞 DEBUG: {self.DEBUG}")
+        print(f"Data dir: {self.DATA_BASE_DIR}")
+        print(f"Data storage: {self.ENABLE_DATA_STORAGE}")
+        print(f"Admin push: {self.ENABLE_ADMIN_PUSH}")
+        print(f"Gemini Extract API: {'Configured' if self.GEMINI_API_KEY else 'Not configured'}")
+        print(f"DEBUG: {self.DEBUG}")
         print("=" * 68)
 
 
 # Agent to directory mapping
-# For v2+ agents, data is stored in /data/{agent_slug}/
-# Any agent not listed here uses its slug directly as directory name
-# This allows new agents added via UI to auto-use their slug
 AGENT_DIRS = {
-    "spotlight": "kia2",  # Kia v2 (Gemini Live) - maps spotlight -> kia2 directory
-    # "tata": "tata",     # Would use "tata" anyway (fallback)
-    # "skoda": "skoda",   # Would use "skoda" anyway (fallback)
+    "spotlight": "kia2",
 }
+
+
 def get_agent_dir(agent: str) -> str:
-    """
-    Get the data directory name for an agent.
-    
-    - Explicit mappings in AGENT_DIRS take precedence
-    - Otherwise, uses the agent slug directly as directory name
-    - This allows new VoiceAgents added via UI to auto-create directories
-    """
     return AGENT_DIRS.get(agent.lower(), agent.lower())

@@ -8,6 +8,157 @@
  */
 
 // ---------------------------------------------------------------------------
+// JSON Auto-Correction Utilities
+// ---------------------------------------------------------------------------
+
+/**
+ * Auto-correct common JSON issues before parsing.
+ * Returns { corrected: string, fixes: string[] } with the fixed JSON and list of corrections made.
+ */
+export function autoCorrectJson(input: string): { corrected: string; fixes: string[] } {
+  const fixes: string[] = [];
+  let json = input;
+
+  // 1. Replace smart/curly quotes with straight quotes
+  const smartDoubleQuotes = /[\u201C\u201D\u201E\u201F\u2033\u2036]/g;
+  const smartSingleQuotes = /[\u2018\u2019\u201A\u201B\u2032\u2035]/g;
+  if (smartDoubleQuotes.test(json)) {
+    json = json.replace(smartDoubleQuotes, '"');
+    fixes.push("Replaced smart double quotes with straight quotes");
+  }
+  if (smartSingleQuotes.test(json)) {
+    json = json.replace(smartSingleQuotes, "'");
+    fixes.push("Replaced smart single quotes with straight quotes");
+  }
+
+  // 2. Replace non-breaking spaces with regular spaces
+  const nbspPattern = /[\u00A0\u2000-\u200B\u202F\u205F\u3000]/g;
+  if (nbspPattern.test(json)) {
+    json = json.replace(nbspPattern, " ");
+    fixes.push("Replaced non-breaking/special spaces with regular spaces");
+  }
+
+  // 3. Remove trailing commas before } or ]
+  const trailingCommaPattern = /,(\s*[}\]])/g;
+  if (trailingCommaPattern.test(json)) {
+    json = json.replace(trailingCommaPattern, "$1");
+    fixes.push("Removed trailing commas");
+  }
+
+  // 4. Fix unescaped backslashes (common issue: \n inside values that aren't actual newlines)
+  // This is tricky - we need to fix invalid escape sequences inside strings
+  // Match string contents and fix invalid escapes
+  const validEscapes = new Set(["\\", '"', "n", "r", "t", "b", "f", "/", "u"]);
+  let inString = false;
+  let escaped = false;
+  let result = "";
+  let fixedEscapes = false;
+  
+  for (let i = 0; i < json.length; i++) {
+    const char = json[i];
+    
+    if (!inString) {
+      if (char === '"') {
+        inString = true;
+      }
+      result += char;
+    } else {
+      if (escaped) {
+        // Check if this is a valid escape sequence
+        if (!validEscapes.has(char) && char !== "u") {
+          // Invalid escape - double the backslash to escape it
+          result += "\\" + char;
+          fixedEscapes = true;
+        } else {
+          result += char;
+        }
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+        result += char;
+      } else if (char === '"') {
+        inString = false;
+        result += char;
+      } else if (char === "\n" || char === "\r" || char === "\t") {
+        // Unescaped control characters in string - escape them
+        if (char === "\n") {
+          result += "\\n";
+          fixedEscapes = true;
+        } else if (char === "\r") {
+          result += "\\r";
+          fixedEscapes = true;
+        } else if (char === "\t") {
+          result += "\\t";
+          fixedEscapes = true;
+        }
+      } else {
+        result += char;
+      }
+    }
+  }
+  
+  if (fixedEscapes) {
+    json = result;
+    fixes.push("Fixed invalid escape sequences");
+  }
+
+  // 5. Remove BOM if present
+  if (json.charCodeAt(0) === 0xFEFF) {
+    json = json.slice(1);
+    fixes.push("Removed BOM character");
+  }
+
+  // 6. Trim whitespace
+  json = json.trim();
+
+  return { corrected: json, fixes };
+}
+
+/**
+ * Parse JSON with auto-correction. Returns the parsed object and any fixes applied.
+ * Throws a detailed error if parsing still fails after corrections.
+ */
+export function parseJsonWithAutoCorrect(input: string): {
+  data: unknown;
+  fixes: string[];
+  wasModified: boolean;
+} {
+  // First try to parse as-is
+  try {
+    const data = JSON.parse(input);
+    return { data, fixes: [], wasModified: false };
+  } catch {
+    // Parsing failed, try auto-correction
+  }
+
+  // Apply auto-corrections
+  const { corrected, fixes } = autoCorrectJson(input);
+  
+  try {
+    const data = JSON.parse(corrected);
+    return { data, fixes, wasModified: fixes.length > 0 };
+  } catch (e) {
+    // Still failed - provide detailed error
+    const error = e as Error;
+    const match = error.message.match(/position (\d+)/i);
+    if (match) {
+      const pos = parseInt(match[1], 10);
+      const start = Math.max(0, pos - 30);
+      const end = Math.min(corrected.length, pos + 30);
+      const context = corrected.slice(start, end);
+      const pointer = " ".repeat(Math.min(30, pos - start)) + "^";
+      throw new Error(
+        `${error.message}\n\nNear: ...${context}...\n      ${pointer}\n\n` +
+        `Auto-corrections applied: ${fixes.length > 0 ? fixes.join(", ") : "none"}`
+      );
+    }
+    throw new Error(
+      `${error.message}\n\nAuto-corrections applied: ${fixes.length > 0 ? fixes.join(", ") : "none"}`
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Key-name → placeholder mapping (top-level and nested)
 // ---------------------------------------------------------------------------
 
@@ -309,6 +460,8 @@ export interface DerivationResult {
   mappedFields: string[];
   /** Fields kept as literal values (no matching placeholder) */
   literalFields: string[];
+  /** Auto-corrections that were applied to fix JSON issues */
+  autoFixes: string[];
 }
 
 /**
@@ -319,7 +472,8 @@ export interface DerivationResult {
  * @throws Error if the JSON is invalid
  */
 export function deriveTemplateFromSample(sampleJson: string): DerivationResult {
-  const sample = JSON.parse(sampleJson);
+  // Use auto-correcting parser
+  const { data: sample, fixes: autoFixes } = parseJsonWithAutoCorrect(sampleJson);
 
   if (typeof sample !== "object" || sample === null || Array.isArray(sample)) {
     throw new Error("Sample payload must be a JSON object (not an array or primitive).");
@@ -371,5 +525,5 @@ export function deriveTemplateFromSample(sampleJson: string): DerivationResult {
 
   collectStats(sample as Record<string, unknown>, template);
 
-  return { template, mappedFields, literalFields };
+  return { template, mappedFields, literalFields, autoFixes };
 }
