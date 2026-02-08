@@ -20,6 +20,65 @@ from typing import Any, Dict, List, Optional
 from config import Config, get_agent_dir
 
 
+def consolidate_transcript(conversation: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Consolidate word-by-word transcription into complete turns.
+    
+    Gemini Live sends transcriptions word-by-word. This function combines
+    consecutive entries from the same speaker into single turn entries.
+    
+    Example:
+        Input:  [{speaker: "agent", text: "Hello"}, {speaker: "agent", text: " there"}]
+        Output: [{speaker: "agent", text: "Hello there", ...}]
+    """
+    if not conversation:
+        return []
+    
+    consolidated = []
+    current_turn = None
+    
+    for entry in conversation:
+        speaker = entry.get("speaker", "")
+        text = entry.get("text", "")
+        timestamp = entry.get("timestamp", "")
+        
+        if not text.strip():
+            continue
+        
+        if current_turn is None:
+            # Start new turn
+            current_turn = {
+                "speaker": speaker,
+                "text": text,
+                "timestamp": timestamp,
+                "end_timestamp": timestamp,
+            }
+        elif current_turn["speaker"] == speaker:
+            # Same speaker - append to current turn
+            current_turn["text"] += text
+            current_turn["end_timestamp"] = timestamp
+        else:
+            # Speaker changed - save current turn and start new one
+            # Clean up the text
+            current_turn["text"] = current_turn["text"].strip()
+            if current_turn["text"]:
+                consolidated.append(current_turn)
+            
+            current_turn = {
+                "speaker": speaker,
+                "text": text,
+                "timestamp": timestamp,
+                "end_timestamp": timestamp,
+            }
+    
+    # Don't forget the last turn
+    if current_turn and current_turn["text"].strip():
+        current_turn["text"] = current_turn["text"].strip()
+        consolidated.append(current_turn)
+    
+    return consolidated
+
+
 class AgentDataStorage:
     """Handles file-based data storage for a specific agent."""
 
@@ -52,6 +111,9 @@ class AgentDataStorage:
     ) -> Optional[str]:
         """
         Save conversation transcript to agent's transcripts directory.
+        
+        Automatically consolidates word-by-word transcriptions into
+        complete turns before saving.
 
         Args:
             call_id: Unique call identifier (UCID)
@@ -69,19 +131,23 @@ class AgentDataStorage:
             filename = self._generate_filename(call_id, "transcript")
             filepath = self.transcripts_dir / filename
 
+            # Consolidate word-by-word entries into complete turns
+            consolidated = consolidate_transcript(conversation)
+
             transcript_data = {
                 "call_id": call_id,
                 "agent": self.agent,
                 "saved_at": datetime.utcnow().isoformat() + "Z",
-                "conversation": conversation,
-                "conversation_count": len(conversation),
+                "conversation": consolidated,
+                "conversation_count": len(consolidated),
+                "raw_entry_count": len(conversation),
                 "metadata": metadata or {},
             }
 
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(transcript_data, f, indent=2, ensure_ascii=False)
 
-            print(f"[{call_id}] 📄 Transcript saved: {filepath}")
+            print(f"[{call_id}] 📄 Transcript saved: {filepath} ({len(consolidated)} turns from {len(conversation)} entries)")
             return str(filepath)
 
         except Exception as e:

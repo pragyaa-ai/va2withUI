@@ -65,42 +65,81 @@ class TelephonySession:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Function Call Extraction from Gemini Messages
+# AI-Driven Call Control (Gemini 2.0 Flash)
 # ────────────────────────────────────────────────────────────────────────────
 
-def _extract_function_call(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Extract function call (tool call) from Gemini message.
-    
-    Gemini Live 2.5 uses function calling to trigger actions like
-    transfer_call() and end_call() based on conversation context.
-    This is the AI-driven approach - no regex pattern matching.
-    
-    Returns dict with 'name' and 'args' if a function call is present.
-    """
+def _is_turn_complete(msg: Dict[str, Any]) -> bool:
+    """Check if Gemini message indicates turn is complete."""
     server_content = msg.get("serverContent", {})
-    model_turn = server_content.get("modelTurn", {})
-    parts = model_turn.get("parts", [])
+    return server_content.get("turnComplete", False) is True
+
+
+async def _check_call_should_end(session: "TelephonySession", cfg: "Config") -> Optional[str]:
+    """
+    Use Gemini 2.0 Flash to intelligently decide if call should end.
     
-    for part in parts:
-        if isinstance(part, dict) and "functionCall" in part:
-            func_call = part["functionCall"]
-            return {
-                "name": func_call.get("name"),
-                "args": func_call.get("args", {}),
-            }
+    Analyzes the last few turns of conversation to determine if:
+    - Agent said goodbye and call should hangup
+    - User requested transfer to human agent
     
-    # Also check toolCall format (alternative structure)
-    tool_call = msg.get("toolCall")
-    if tool_call:
-        func_calls = tool_call.get("functionCalls", [])
-        if func_calls:
-            return {
-                "name": func_calls[0].get("name"),
-                "args": func_calls[0].get("args", {}),
-            }
+    Returns: "hangup", "transfer", or None (continue)
     
-    return None
+    No regex pattern matching - all decisions made by Gemini AI.
+    """
+    if not cfg.GEMINI_API_KEY:
+        return None
+    
+    if len(session.conversation) < 2:
+        return None
+    
+    # Get last few turns for analysis
+    recent_turns = session.conversation[-10:]
+    conversation_text = "\n".join(
+        f"{entry.get('speaker', 'unknown').upper()}: {entry.get('text', '')}"
+        for entry in recent_turns
+    )
+    
+    try:
+        import aiohttp
+        
+        prompt = f"""Analyze this conversation excerpt from a voice call and determine what action to take.
+
+CONVERSATION:
+{conversation_text}
+
+Based on the conversation:
+- If the agent said goodbye/thank you/ended the conversation → respond "hangup"
+- If the user asked to speak to a human/sales agent/dealer → respond "transfer"
+- If the conversation should continue → respond "continue"
+
+Respond with ONLY one word: "hangup", "transfer", or "continue"
+"""
+        
+        async with aiohttp.ClientSession() as http_session:
+            async with http_session.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={cfg.GEMINI_API_KEY}",
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.1, "maxOutputTokens": 10},
+                },
+                headers={"Content-Type": "application/json"},
+            ) as response:
+                if response.status != 200:
+                    return None
+                
+                data = await response.json()
+                result = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip().lower()
+                
+                if result in ("hangup", "transfer"):
+                    print(f"[{session.ucid}] 🤖 Gemini 2.0 Flash decision: {result}")
+                    return result
+                
+                return None
+                
+    except Exception as e:
+        if cfg.DEBUG:
+            print(f"[{session.ucid}] ⚠️ Call end check failed: {e}")
+        return None
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -379,9 +418,9 @@ async def _gemini_reader(
     Read messages from Gemini Live and buffer audio for the drip-feed sender.
     Does NOT send audio directly — _audio_sender handles paced delivery.
     
-    Handles Gemini function calls for call control:
-    - transfer_call(): Gemini decides to transfer to human agent
-    - end_call(): Gemini decides to end the call
+    Uses Gemini 2.0 Flash to intelligently decide when to:
+    - End the call (hangup)
+    - Transfer to human agent
     
     No regex pattern matching - all decisions made by Gemini AI.
     """
@@ -408,27 +447,6 @@ async def _gemini_reader(
                     pass
                 continue
 
-            # ─────────────────────────────────────────────────────────────────
-            # Handle Gemini function calls (AI-driven call control)
-            # ─────────────────────────────────────────────────────────────────
-            func_call = _extract_function_call(msg)
-            if func_call and not session.hangup_sent:
-                func_name = func_call.get("name")
-                func_args = func_call.get("args", {})
-                reason = func_args.get("reason", "AI decision")
-                
-                if func_name == "transfer_call":
-                    print(f"[{session.ucid}] 🤖 Gemini called transfer_call(): {reason}")
-                    session.user_wants_transfer = True
-                    session.call_ending = True
-                    asyncio.create_task(_handle_call_end(session, cfg))
-                    
-                elif func_name == "end_call":
-                    print(f"[{session.ucid}] 🤖 Gemini called end_call(): {reason}")
-                    session.user_wants_transfer = False
-                    session.call_ending = True
-                    asyncio.create_task(_handle_call_end(session, cfg))
-
             # Capture transcription if present
             transcription = _extract_transcription(msg, debug=cfg.DEBUG)
             if transcription:
@@ -440,6 +458,24 @@ async def _gemini_reader(
                 if cfg.LOG_TRANSCRIPTS:
                     display_text = text[:80] + "..." if len(text) > 80 else text
                     print(f"[{session.ucid}] 📝 {speaker}: {display_text}")
+
+            # ─────────────────────────────────────────────────────────────────
+            # AI-driven call end detection (on turn complete)
+            # Uses Gemini 2.0 Flash to analyze conversation and decide
+            # ─────────────────────────────────────────────────────────────────
+            if _is_turn_complete(msg) and not session.hangup_sent and not session.call_ending:
+                # Check if we should end the call using Gemini 2.0 Flash
+                decision = await _check_call_should_end(session, cfg)
+                
+                if decision == "hangup":
+                    session.user_wants_transfer = False
+                    session.call_ending = True
+                    asyncio.create_task(_handle_call_end(session, cfg))
+                    
+                elif decision == "transfer":
+                    session.user_wants_transfer = True
+                    session.call_ending = True
+                    asyncio.create_task(_handle_call_end(session, cfg))
 
             audio_b64 = _extract_audio_b64_from_gemini_message(msg)
             if not audio_b64:

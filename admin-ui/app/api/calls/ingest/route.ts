@@ -94,14 +94,21 @@ function mapCompletionStatus(status?: string): "COMPLETE" | "PARTIAL" | "INCOMPL
   return null;
 }
 
-// Generate summary and sentiment from transcript using Gemini
-async function generateSummaryAndSentiment(transcript: TranscriptEntry[]): Promise<{
+// Generate summary and sentiment from transcript using Gemini 2.0 Flash
+async function generateSummaryAndSentiment(transcript: TranscriptEntry[], callId: string): Promise<{
   summary: string | null;
   sentiment: "POSITIVE" | "NEUTRAL" | "NEGATIVE" | null;
   sentimentScore: number | null;
 }> {
   const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
-  if (!apiKey || transcript.length === 0) {
+  
+  if (!apiKey) {
+    console.error(`[Ingest] ${callId}: No GOOGLE_API_KEY or GEMINI_API_KEY found in environment`);
+    return { summary: null, sentiment: null, sentimentScore: null };
+  }
+  
+  if (!transcript || transcript.length === 0) {
+    console.log(`[Ingest] ${callId}: No transcript entries to analyze`);
     return { summary: null, sentiment: null, sentimentScore: null };
   }
 
@@ -111,8 +118,11 @@ async function generateSummaryAndSentiment(transcript: TranscriptEntry[]): Promi
       .map((entry) => `${entry.speaker.toUpperCase()}: ${entry.text}`)
       .join("\n");
 
+    console.log(`[Ingest] ${callId}: Calling Gemini 2.0 Flash for summary (${transcript.length} entries)`);
+
+    // Use Gemini 2.0 Flash API
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -121,19 +131,21 @@ async function generateSummaryAndSentiment(transcript: TranscriptEntry[]): Promi
             {
               parts: [
                 {
-                  text: `Analyze the following customer service call transcript and provide:
-1. Overall sentiment (POSITIVE, NEUTRAL, or NEGATIVE)
+                  text: `Analyze the following customer service call transcript from an automotive dealership VoiceAgent.
+
+Provide:
+1. Overall sentiment (POSITIVE, NEUTRAL, or NEGATIVE) based on customer satisfaction
 2. Sentiment score from 0.0 to 1.0 (0.0 = very negative, 0.5 = neutral, 1.0 = very positive)
-3. A brief 2-3 sentence summary of the call
+3. A concise 2-3 sentence summary of the call covering: what the customer wanted, what information was exchanged, and the outcome
 
 TRANSCRIPT:
 ${conversationText}
 
-Respond in JSON format only:
+Respond ONLY with valid JSON (no markdown, no backticks):
 {
-  "sentiment": "POSITIVE" | "NEUTRAL" | "NEGATIVE",
+  "sentiment": "POSITIVE",
   "sentimentScore": 0.75,
-  "summary": "Brief summary here"
+  "summary": "Summary text here"
 }`,
                 },
               ],
@@ -148,27 +160,36 @@ Respond in JSON format only:
     );
 
     if (!response.ok) {
-      console.error("[Ingest] Gemini API error:", response.status);
+      const errorText = await response.text();
+      console.error(`[Ingest] ${callId}: Gemini API error ${response.status}: ${errorText.slice(0, 200)}`);
       return { summary: null, sentiment: null, sentimentScore: null };
     }
 
     const data = await response.json();
     const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
-    // Parse JSON from response
-    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    // Parse JSON from response (handle markdown code blocks)
+    let jsonStr = responseText;
+    if (responseText.includes("```")) {
+      const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      jsonStr = jsonMatch ? jsonMatch[1] : responseText;
+    }
+    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
+      console.error(`[Ingest] ${callId}: Could not parse JSON from Gemini response`);
       return { summary: null, sentiment: null, sentimentScore: null };
     }
 
     const analysis = JSON.parse(jsonMatch[0]);
+    console.log(`[Ingest] ${callId}: Summary generated successfully - sentiment: ${analysis.sentiment}`);
+    
     return {
       summary: analysis.summary || null,
       sentiment: analysis.sentiment || null,
       sentimentScore: analysis.sentimentScore ? parseFloat(analysis.sentimentScore) : null,
     };
   } catch (error) {
-    console.error("[Ingest] Error generating summary/sentiment:", error);
+    console.error(`[Ingest] ${callId}: Error generating summary/sentiment:`, error);
     return { summary: null, sentiment: null, sentimentScore: null };
   }
 }
@@ -224,12 +245,10 @@ export async function POST(request: NextRequest) {
     let sentimentScore: number | null = null;
 
     if (payload.transcript && payload.transcript.length > 0) {
-      console.log(`[Ingest] Generating summary/sentiment for ${payload.call_ref_id}...`);
-      const analysis = await generateSummaryAndSentiment(payload.transcript);
+      const analysis = await generateSummaryAndSentiment(payload.transcript, payload.call_ref_id);
       summary = analysis.summary;
       sentiment = analysis.sentiment;
       sentimentScore = analysis.sentimentScore;
-      console.log(`[Ingest] Generated: sentiment=${sentiment}, score=${sentimentScore}`);
     }
 
     // Upsert the call session (update if exists, create if not)

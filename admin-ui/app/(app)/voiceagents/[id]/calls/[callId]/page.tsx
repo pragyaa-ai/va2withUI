@@ -48,14 +48,14 @@ interface CallDetail {
   payloadJson?: Record<string, unknown>;
 }
 
-type TabType = "transcript" | "summary" | "extracted" | "payload";
+type TabType = "summary" | "extracted" | "payload";
 
 export default function CallDetailPage() {
   const params = useParams();
   const [call, setCall] = useState<CallDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [generatingSentiment, setGeneratingSentiment] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabType>("transcript");
+  const [activeTab, setActiveTab] = useState<TabType>("summary");
 
   useEffect(() => {
     fetch(`/api/voiceagents/${params.id}/calls/${params.callId}`)
@@ -179,8 +179,7 @@ export default function CallDetailPage() {
   }
 
   const tabs: { id: TabType; label: string }[] = [
-    { id: "transcript", label: "Transcript" },
-    { id: "summary", label: "Summary" },
+    { id: "summary", label: "Summary & Sentiment" },
     { id: "extracted", label: "Extracted Data" },
     { id: "payload", label: "Raw Payload" },
   ];
@@ -265,57 +264,6 @@ export default function CallDetailPage() {
 
       {/* Tab Content */}
       <div className="min-h-[400px]">
-        {/* Transcript Tab */}
-        {activeTab === "transcript" && (
-          <Card className="p-6">
-            <h3 className="text-sm font-semibold text-slate-900 mb-4">Conversation Transcript</h3>
-            {call.transcript && call.transcript.length > 0 ? (
-              <div className="space-y-4 max-h-[600px] overflow-y-auto">
-                {call.transcript.map((entry, index) => (
-                  <div
-                    key={index}
-                    className={`flex gap-3 ${
-                      entry.speaker === "user" ? "flex-row" : "flex-row-reverse"
-                    }`}
-                  >
-                    <div
-                      className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium ${
-                        entry.speaker === "user"
-                          ? "bg-slate-200 text-slate-600"
-                          : "bg-indigo-100 text-indigo-600"
-                      }`}
-                    >
-                      {entry.speaker === "user" ? "U" : "A"}
-                    </div>
-                    <div
-                      className={`flex-1 max-w-[80%] ${
-                        entry.speaker === "user" ? "text-left" : "text-right"
-                      }`}
-                    >
-                      <div
-                        className={`inline-block rounded-2xl px-4 py-2 ${
-                          entry.speaker === "user"
-                            ? "bg-slate-100 text-slate-900"
-                            : "bg-indigo-600 text-white"
-                        }`}
-                      >
-                        <p className="text-sm">{entry.text}</p>
-                      </div>
-                      <p className="text-xs text-slate-400 mt-1 px-1">
-                        {formatTime(entry.timestamp)}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-slate-400 text-center py-8">
-                No transcript available for this call.
-              </p>
-            )}
-          </Card>
-        )}
-
         {/* Summary Tab */}
         {activeTab === "summary" && (
           <Card className="p-6">
