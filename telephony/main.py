@@ -62,6 +62,87 @@ class TelephonySession:
     transfer_number: Optional[str] = None
     last_user_activity: Optional[datetime] = None
     silence_reprompt_count: int = 0
+    # Call end state tracking
+    agent_asked_transfer: bool = False
+    user_wants_transfer: Optional[bool] = None  # True=yes, False=no, None=not answered
+    call_ending: bool = False  # True when agent says goodbye
+    hangup_sent: bool = False  # True after hangup/transfer event sent
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Conversation Monitoring for Transfer/Hangup
+# ────────────────────────────────────────────────────────────────────────────
+
+# Patterns to detect agent asking about transfer to sales team
+TRANSFER_QUESTION_PATTERNS = [
+    "want to talk to",
+    "speak with a",
+    "speak to a",
+    "talk to a sales",
+    "talk to an agent",
+    "talk to our team",
+    "connect you with",
+    "transfer you to",
+    "pass you to",
+    "sales team",
+    "sales representative",
+    "dealer se baat",
+    "agent se baat",
+    "team se baat",
+    "connect kar",
+]
+
+# Patterns to detect user saying YES to transfer
+YES_PATTERNS = [
+    "yes", "yeah", "yep", "sure", "ok", "okay", "please", "haan", "ji", "ha",
+    "bilkul", "zaroor", "theek", "theek hai", "kar dijiye", "kar do",
+    "connect karo", "connect kar do", "baat karna", "chahta", "chahti",
+]
+
+# Patterns to detect user saying NO to transfer
+NO_PATTERNS = [
+    "no", "nope", "nahi", "nahin", "naa", "mat", "rehne do", "rehne dijiye",
+    "zaroorat nahi", "no need", "not now", "later", "baad mein", "abhi nahi",
+]
+
+# Patterns to detect agent saying goodbye (call ending)
+GOODBYE_PATTERNS = [
+    "thank you", "thanks", "dhanyavaad", "shukriya", "bye", "goodbye",
+    "have a good", "have a great", "take care", "namaste", "alvida",
+    "nice talking", "pleasure", "good day", "phir milenge",
+]
+
+
+def _detect_transfer_question(text: str) -> bool:
+    """Check if agent is asking about transfer to sales."""
+    text_lower = text.lower()
+    return any(pattern in text_lower for pattern in TRANSFER_QUESTION_PATTERNS)
+
+
+def _detect_user_response(text: str) -> Optional[bool]:
+    """
+    Detect user's yes/no response to transfer question.
+    Returns: True=yes, False=no, None=unclear
+    """
+    text_lower = text.lower().strip()
+    
+    # Check for YES patterns
+    for pattern in YES_PATTERNS:
+        if pattern in text_lower:
+            return True
+    
+    # Check for NO patterns
+    for pattern in NO_PATTERNS:
+        if pattern in text_lower:
+            return False
+    
+    return None
+
+
+def _detect_goodbye(text: str) -> bool:
+    """Check if agent is saying goodbye (call ending)."""
+    text_lower = text.lower()
+    return any(pattern in text_lower for pattern in GOODBYE_PATTERNS)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -208,7 +289,7 @@ def _is_interrupted(msg: Dict[str, Any]) -> bool:
     return bool(msg.get("serverContent", {}).get("interrupted"))
 
 
-def _extract_transcription(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _extract_transcription(msg: Dict[str, Any], debug: bool = False) -> Optional[Dict[str, Any]]:
     """
     Extract transcription text from Gemini message.
     
@@ -219,6 +300,12 @@ def _extract_transcription(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     used for extraction, as the agent confirms and corrects user input.
     """
     server_content = msg.get("serverContent", {})
+    
+    # Debug: log all keys in serverContent to see what Gemini is sending
+    if debug and server_content:
+        keys = list(server_content.keys())
+        if keys and keys != ["modelTurn"]:  # Don't spam for audio-only messages
+            print(f"[DEBUG] serverContent keys: {keys}")
     
     # Input transcription (user speech - raw, may have errors)
     input_trans = server_content.get("inputTranscription", {})
@@ -333,6 +420,11 @@ async def _gemini_reader(
     """
     Read messages from Gemini Live and buffer audio for the drip-feed sender.
     Does NOT send audio directly — _audio_sender handles paced delivery.
+    
+    Also monitors conversation for transfer/hangup decisions:
+    - Detects when agent asks about transfer to sales team
+    - Detects user's yes/no response
+    - Triggers transfer or hangup when agent says goodbye
     """
     try:
         async for msg in session.gemini.messages():
@@ -362,13 +454,49 @@ async def _gemini_reader(
                 continue
 
             # Capture transcription if present
-            transcription = _extract_transcription(msg)
+            transcription = _extract_transcription(msg, debug=cfg.DEBUG)
             if transcription:
                 session.conversation.append(transcription)
+                speaker = transcription["speaker"]
+                text = transcription.get("text", "")
+                
                 if cfg.LOG_TRANSCRIPTS:
-                    speaker = transcription["speaker"]
-                    text = transcription["text"][:50] + "..." if len(transcription["text"]) > 50 else transcription["text"]
-                    print(f"[{session.ucid}] 📝 {speaker}: {text}")
+                    display_text = text[:50] + "..." if len(text) > 50 else text
+                    print(f"[{session.ucid}] 📝 {speaker}: {display_text}")
+                
+                # ─────────────────────────────────────────────────────────────
+                # Conversation monitoring for transfer/hangup
+                # ─────────────────────────────────────────────────────────────
+                
+                if speaker == "agent":
+                    # Check if agent is asking about transfer to sales
+                    if not session.agent_asked_transfer and _detect_transfer_question(text):
+                        session.agent_asked_transfer = True
+                        if cfg.DEBUG:
+                            print(f"[{session.ucid}] 🔄 Detected transfer question from agent")
+                    
+                    # Check if agent is saying goodbye (call ending)
+                    if _detect_goodbye(text):
+                        session.call_ending = True
+                        if cfg.DEBUG:
+                            print(f"[{session.ucid}] 👋 Detected goodbye from agent")
+                        
+                        # Trigger transfer or hangup if not already done
+                        if not session.hangup_sent:
+                            # Wait a moment for audio to be sent, then trigger call control
+                            asyncio.create_task(
+                                _handle_call_end(session, cfg)
+                            )
+                
+                elif speaker == "user":
+                    # If agent asked about transfer, check user's response
+                    if session.agent_asked_transfer and session.user_wants_transfer is None:
+                        response = _detect_user_response(text)
+                        if response is not None:
+                            session.user_wants_transfer = response
+                            if cfg.DEBUG:
+                                decision = "YES (transfer)" if response else "NO (hangup)"
+                                print(f"[{session.ucid}] 🎯 User transfer decision: {decision}")
 
             audio_b64 = _extract_audio_b64_from_gemini_message(msg)
             if not audio_b64:
@@ -395,6 +523,54 @@ async def _gemini_reader(
     except Exception as e:
         if cfg.DEBUG:
             print(f"[{session.ucid}] ❌ Gemini reader error: {e}")
+
+
+async def _handle_call_end(session: TelephonySession, cfg: Config) -> None:
+    """
+    Handle end of call - send transfer or hangup event to telephony provider.
+    
+    Called when agent says goodbye. Waits for audio to finish playing,
+    then sends the appropriate event:
+    - Transfer if user said YES to talking to sales team
+    - Hangup if user said NO or didn't respond
+    """
+    if session.hangup_sent:
+        return  # Already handled
+    
+    try:
+        # Wait for output buffer to drain so goodbye audio plays
+        # Check every 100ms, timeout after 5 seconds
+        wait_time = 0
+        while len(session.output_buffer) > 0 and wait_time < 5.0:
+            await asyncio.sleep(0.1)
+            wait_time += 0.1
+        
+        # Extra 500ms to ensure audio is fully delivered
+        await asyncio.sleep(0.5)
+        
+        session.hangup_sent = True
+        
+        if session.user_wants_transfer:
+            # User wants to talk to a sales agent - send transfer event
+            # Get dealer number from agent config if available
+            transfer_number = session.transfer_number or os.getenv("DEFAULT_TRANSFER_NUMBER", "")
+            
+            if transfer_number:
+                print(f"[{session.ucid}] 📞 User requested transfer → calling Waybeo transfer API")
+                await send_transfer_event(session, transfer_number, cfg)
+            else:
+                # No transfer number configured, just hangup
+                print(f"[{session.ucid}] ⚠️ Transfer requested but no number configured → hangup")
+                await send_hangup_event(session, cfg, "Transfer requested but no number configured")
+        else:
+            # User declined transfer or didn't respond - send hangup
+            reason = "User declined agent transfer" if session.user_wants_transfer is False else "Call completed"
+            print(f"[{session.ucid}] 📞 Calling Waybeo hangup API: {reason}")
+            await send_hangup_event(session, cfg, reason)
+            
+    except Exception as e:
+        if cfg.DEBUG:
+            print(f"[{session.ucid}] ❌ Error handling call end: {e}")
 
 
 async def handle_client(client_ws, path: str):
@@ -522,6 +698,16 @@ async def handle_client(client_ws, path: str):
             if event in {"stop", "end", "close"}:
                 if cfg.LOG_TRANSCRIPTS:
                     print(f"[{session.ucid}] 📞 stop event received")
+                
+                # If we haven't sent hangup yet, send it now as a fallback
+                if not session.hangup_sent:
+                    session.hangup_sent = True
+                    reason = "Call ended by telephony provider"
+                    if cfg.DEBUG:
+                        print(f"[{session.ucid}] 📞 Fallback hangup (stop event)")
+                    # Note: Don't await here to avoid blocking, and stop event means
+                    # the call is already ending on the telephony side
+                
                 break
 
             if event == "media" and msg.get("data"):
