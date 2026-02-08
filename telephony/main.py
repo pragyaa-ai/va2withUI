@@ -64,6 +64,9 @@ class TelephonySession:
     user_wants_transfer: Optional[bool] = None
     call_ending: bool = False
     hangup_sent: bool = False
+    # Call control event tracking (for Admin UI)
+    call_control_event: Optional[Dict[str, Any]] = None
+    waybeo_payload: Optional[Dict[str, Any]] = None
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -523,6 +526,7 @@ async def _handle_call_end(session: TelephonySession, cfg: Config) -> None:
         await asyncio.sleep(0.5)
         
         session.hangup_sent = True
+        event_timestamp = datetime.now().isoformat()
         
         if session.user_wants_transfer:
             # User wants to talk to a sales agent - send transfer event
@@ -532,15 +536,34 @@ async def _handle_call_end(session: TelephonySession, cfg: Config) -> None:
             if transfer_number:
                 print(f"[{session.ucid}] 📞 User requested transfer → calling Waybeo transfer API")
                 await send_transfer_event(session, transfer_number, cfg)
+                session.call_control_event = {
+                    "type": "transfer",
+                    "reason": "User requested to speak with sales agent",
+                    "timestamp": event_timestamp,
+                    "status": "sent",
+                    "transfer_number": transfer_number,
+                }
             else:
                 # No transfer number configured, just hangup
                 print(f"[{session.ucid}] ⚠️ Transfer requested but no number configured → hangup")
                 await send_hangup_event(session, cfg, "Transfer requested but no number configured")
+                session.call_control_event = {
+                    "type": "hangup",
+                    "reason": "Transfer requested but no number configured",
+                    "timestamp": event_timestamp,
+                    "status": "sent",
+                }
         else:
             # User declined transfer or didn't respond - send hangup
             reason = "User declined agent transfer" if session.user_wants_transfer is False else "Call completed"
             print(f"[{session.ucid}] 📞 Calling Waybeo hangup API: {reason}")
             await send_hangup_event(session, cfg, reason)
+            session.call_control_event = {
+                "type": "hangup",
+                "reason": reason,
+                "timestamp": event_timestamp,
+                "status": "sent",
+            }
             
     except Exception as e:
         if cfg.DEBUG:
@@ -916,11 +939,17 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
         # the template doesn't include agent_slug
         if isinstance(si_payload, dict):
             si_payload["agent_slug"] = session.agent
+            
+            # Include waybeo_payload and call_control_event for Admin UI (v0.6+)
+            if session.waybeo_payload:
+                si_payload["waybeo_payload"] = session.waybeo_payload
+            if session.call_control_event:
+                si_payload["call_control_event"] = session.call_control_event
 
         # Save SI payload to local file
         storage.save_si_payload(session.ucid, si_payload)
 
-        # Push to Admin UI database - this is what shows in Raw Payload
+        # Push to Admin UI database - includes SI payload, waybeo payload, and call control event
         await admin_client.push_call_data(si_payload, session.ucid)
 
         # Deliver to external webhooks if configured
@@ -965,6 +994,10 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
                         "agent_id": session.agent,
                         "store_code": session.store_code or "",
                     }
+                
+                # Store waybeo_payload in session for Admin UI (v0.6+)
+                session.waybeo_payload = waybeo_payload
+                
                 print(f"[{session.ucid}] 📤 Delivering to Waybeo webhook: {waybeo_endpoint[:50]}...")
                 await admin_client.push_to_waybeo_webhook(
                     payload=waybeo_payload,
@@ -972,6 +1005,14 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
                     auth_header=waybeo_auth,
                     call_id=session.ucid,
                 )
+            
+            # Update Admin UI with waybeo payload (even if not sending to endpoint)
+            if session.waybeo_payload or session.call_control_event:
+                # Re-push with updated data
+                si_payload_updated = dict(si_payload) if isinstance(si_payload, dict) else {}
+                si_payload_updated["waybeo_payload"] = session.waybeo_payload
+                si_payload_updated["call_control_event"] = session.call_control_event
+                await admin_client.push_call_data(si_payload_updated, session.ucid)
 
     except Exception as e:
         print(f"[{session.ucid}] ❌ Error saving call data: {e}")

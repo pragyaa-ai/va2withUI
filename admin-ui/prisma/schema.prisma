@@ -198,7 +198,13 @@ model CallSession {
   analyticsJson Json?             // {total_exchanges, user_messages, assistant_messages, question_answer_pairs}
   
   // Raw payload from queue processor
-  payloadJson   Json?             // Complete queue processor result
+  payloadJson   Json?             // SI (Single Interface) webhook payload
+  
+  // Waybeo payload
+  waybeoPayloadJson Json?         // Waybeo callback payload
+  
+  // Call control event (hangup/transfer sent to Waybeo)
+  callControlEvent Json?          // {type: "hangup"|"transfer", reason, timestamp, status}
   
   // Legacy meta field
   metaJson      Json?

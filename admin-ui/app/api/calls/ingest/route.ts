@@ -47,6 +47,13 @@ interface TranscriptEntry {
   text: string;
 }
 
+interface CallControlEvent {
+  type: "hangup" | "transfer";
+  reason?: string;
+  timestamp: string;
+  status?: string;
+}
+
 interface SIPayload {
   id?: string;
   call_ref_id: string;
@@ -74,6 +81,9 @@ interface SIPayload {
     time?: string;
     action?: string;
   };
+  // Waybeo payload and call control event (new in v0.6)
+  waybeo_payload?: Record<string, unknown>;
+  call_control_event?: CallControlEvent;
 }
 
 // Helper to extract value from response_data array
@@ -266,6 +276,8 @@ export async function POST(request: NextRequest) {
         outcome: mapCompletionStatus(payload.completion_status),
         extractedData: extractedData as Prisma.InputJsonValue,
         payloadJson: payload as unknown as Prisma.InputJsonValue,
+        waybeoPayloadJson: payload.waybeo_payload as Prisma.InputJsonValue ?? undefined,
+        callControlEvent: payload.call_control_event as unknown as Prisma.InputJsonValue ?? undefined,
         transcript: payload.transcript as unknown as Prisma.InputJsonValue ?? undefined,
         summary: summary ?? undefined,
         sentiment: sentiment ?? undefined,
@@ -283,6 +295,8 @@ export async function POST(request: NextRequest) {
         outcome: mapCompletionStatus(payload.completion_status),
         extractedData: extractedData as Prisma.InputJsonValue,
         payloadJson: payload as unknown as Prisma.InputJsonValue,
+        waybeoPayloadJson: payload.waybeo_payload as Prisma.InputJsonValue ?? undefined,
+        callControlEvent: payload.call_control_event as unknown as Prisma.InputJsonValue ?? undefined,
         transcript: payload.transcript as unknown as Prisma.InputJsonValue ?? undefined,
         summary: summary ?? undefined,
         sentiment: sentiment ?? undefined,

@@ -28,6 +28,13 @@ interface ExtractedData {
   overall_status?: string;
 }
 
+interface CallControlEvent {
+  type: "hangup" | "transfer";
+  reason?: string;
+  timestamp: string;
+  status?: string;
+}
+
 interface CallDetail {
   id: string;
   callId?: string;
@@ -46,9 +53,11 @@ interface CallDetail {
   extractedData?: ExtractedData;
   analyticsJson?: Record<string, unknown>;
   payloadJson?: Record<string, unknown>;
+  waybeoPayloadJson?: Record<string, unknown>;
+  callControlEvent?: CallControlEvent;
 }
 
-type TabType = "summary" | "extracted" | "payload";
+type TabType = "summary" | "extracted" | "siPayload" | "waybeoPayload";
 
 export default function CallDetailPage() {
   const params = useParams();
@@ -181,7 +190,8 @@ export default function CallDetailPage() {
   const tabs: { id: TabType; label: string }[] = [
     { id: "summary", label: "Summary & Sentiment" },
     { id: "extracted", label: "Extracted Data" },
-    { id: "payload", label: "Raw Payload" },
+    { id: "siPayload", label: "SI Payload" },
+    { id: "waybeoPayload", label: "Waybeo Payload" },
   ];
 
   return (
@@ -383,8 +393,8 @@ export default function CallDetailPage() {
           </Card>
         )}
 
-        {/* Raw Payload Tab */}
-        {activeTab === "payload" && (
+        {/* SI Payload Tab */}
+        {activeTab === "siPayload" && (
           <Card className="p-6">
             <h3 className="text-sm font-semibold text-slate-900 mb-4">SI Payload</h3>
             {call.payloadJson ? (
@@ -395,7 +405,7 @@ export default function CallDetailPage() {
               </div>
             ) : (
               <p className="text-slate-400 text-center py-8">
-                No payload available for this call.
+                No SI payload available for this call.
               </p>
             )}
 
@@ -409,6 +419,69 @@ export default function CallDetailPage() {
                 </div>
               </div>
             )}
+          </Card>
+        )}
+
+        {/* Waybeo Payload Tab */}
+        {activeTab === "waybeoPayload" && (
+          <Card className="p-6">
+            <h3 className="text-sm font-semibold text-slate-900 mb-4">Waybeo Payload</h3>
+            {call.waybeoPayloadJson ? (
+              <div className="bg-slate-900 rounded-lg p-4 overflow-x-auto">
+                <pre className="text-sm text-slate-100 font-mono whitespace-pre-wrap">
+                  {JSON.stringify(call.waybeoPayloadJson, null, 2)}
+                </pre>
+              </div>
+            ) : (
+              <p className="text-slate-400 text-center py-8">
+                No Waybeo payload available for this call.
+              </p>
+            )}
+
+            {/* Call Control Event (Hangup/Transfer) */}
+            <div className="mt-6 pt-6 border-t border-slate-200">
+              <h4 className="text-sm font-semibold text-slate-900 mb-3">Call Control Event</h4>
+              {call.callControlEvent ? (
+                <div className={`p-4 rounded-lg border ${
+                  call.callControlEvent.type === "transfer" 
+                    ? "bg-violet-50 border-violet-200" 
+                    : "bg-amber-50 border-amber-200"
+                }`}>
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium ${
+                      call.callControlEvent.type === "transfer"
+                        ? "bg-violet-100 text-violet-700"
+                        : "bg-amber-100 text-amber-700"
+                    }`}>
+                      {call.callControlEvent.type === "transfer" ? "🔀 Transfer" : "📞 Hangup"}
+                    </span>
+                    {call.callControlEvent.status && (
+                      <span className="text-xs text-slate-500">
+                        Status: {call.callControlEvent.status}
+                      </span>
+                    )}
+                  </div>
+                  {call.callControlEvent.reason && (
+                    <p className="text-sm text-slate-700 mb-2">
+                      <span className="font-medium">Reason:</span> {call.callControlEvent.reason}
+                    </p>
+                  )}
+                  <p className="text-xs text-slate-500">
+                    <span className="font-medium">Timestamp:</span>{" "}
+                    {new Date(call.callControlEvent.timestamp).toLocaleString("en-IN", {
+                      dateStyle: "medium",
+                      timeStyle: "medium",
+                    })}
+                  </p>
+                </div>
+              ) : (
+                <div className="p-4 rounded-lg bg-slate-50 border border-slate-200 text-center">
+                  <p className="text-slate-400 text-sm">
+                    No hangup or transfer event recorded for this call.
+                  </p>
+                </div>
+              )}
+            </div>
           </Card>
         )}
       </div>
