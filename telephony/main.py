@@ -57,92 +57,50 @@ class TelephonySession:
     start_time: Optional[datetime] = None
     customer_number: Optional[str] = None
     store_code: Optional[str] = None
-    # Transfer/hangup state
-    transfer_requested: bool = False
+    # Transfer/hangup state (Gemini decides via function calling)
     transfer_number: Optional[str] = None
-    last_user_activity: Optional[datetime] = None
-    silence_reprompt_count: int = 0
-    # Call end state tracking
-    agent_asked_transfer: bool = False
-    user_wants_transfer: Optional[bool] = None  # True=yes, False=no, None=not answered
-    call_ending: bool = False  # True when agent says goodbye
-    hangup_sent: bool = False  # True after hangup/transfer event sent
+    user_wants_transfer: Optional[bool] = None  # Set by Gemini function call
+    call_ending: bool = False  # Set when Gemini calls end_call/transfer_call
+    hangup_sent: bool = False  # Prevents duplicate hangup events
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Conversation Monitoring for Transfer/Hangup
+# Function Call Extraction from Gemini Messages
 # ────────────────────────────────────────────────────────────────────────────
 
-# Patterns to detect agent asking about transfer to sales team
-TRANSFER_QUESTION_PATTERNS = [
-    "want to talk to",
-    "speak with a",
-    "speak to a",
-    "talk to a sales",
-    "talk to an agent",
-    "talk to our team",
-    "connect you with",
-    "transfer you to",
-    "pass you to",
-    "sales team",
-    "sales representative",
-    "dealer se baat",
-    "agent se baat",
-    "team se baat",
-    "connect kar",
-]
-
-# Patterns to detect user saying YES to transfer
-YES_PATTERNS = [
-    "yes", "yeah", "yep", "sure", "ok", "okay", "please", "haan", "ji", "ha",
-    "bilkul", "zaroor", "theek", "theek hai", "kar dijiye", "kar do",
-    "connect karo", "connect kar do", "baat karna", "chahta", "chahti",
-]
-
-# Patterns to detect user saying NO to transfer
-NO_PATTERNS = [
-    "no", "nope", "nahi", "nahin", "naa", "mat", "rehne do", "rehne dijiye",
-    "zaroorat nahi", "no need", "not now", "later", "baad mein", "abhi nahi",
-]
-
-# Patterns to detect agent saying goodbye (call ending)
-GOODBYE_PATTERNS = [
-    "thank you", "thanks", "dhanyavaad", "shukriya", "bye", "goodbye",
-    "have a good", "have a great", "take care", "namaste", "alvida",
-    "nice talking", "pleasure", "good day", "phir milenge",
-]
-
-
-def _detect_transfer_question(text: str) -> bool:
-    """Check if agent is asking about transfer to sales."""
-    text_lower = text.lower()
-    return any(pattern in text_lower for pattern in TRANSFER_QUESTION_PATTERNS)
-
-
-def _detect_user_response(text: str) -> Optional[bool]:
+def _extract_function_call(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
-    Detect user's yes/no response to transfer question.
-    Returns: True=yes, False=no, None=unclear
+    Extract function call (tool call) from Gemini message.
+    
+    Gemini Live 2.5 uses function calling to trigger actions like
+    transfer_call() and end_call() based on conversation context.
+    This is the AI-driven approach - no regex pattern matching.
+    
+    Returns dict with 'name' and 'args' if a function call is present.
     """
-    text_lower = text.lower().strip()
+    server_content = msg.get("serverContent", {})
+    model_turn = server_content.get("modelTurn", {})
+    parts = model_turn.get("parts", [])
     
-    # Check for YES patterns
-    for pattern in YES_PATTERNS:
-        if pattern in text_lower:
-            return True
+    for part in parts:
+        if isinstance(part, dict) and "functionCall" in part:
+            func_call = part["functionCall"]
+            return {
+                "name": func_call.get("name"),
+                "args": func_call.get("args", {}),
+            }
     
-    # Check for NO patterns
-    for pattern in NO_PATTERNS:
-        if pattern in text_lower:
-            return False
+    # Also check toolCall format (alternative structure)
+    tool_call = msg.get("toolCall")
+    if tool_call:
+        func_calls = tool_call.get("functionCalls", [])
+        if func_calls:
+            return {
+                "name": func_calls[0].get("name"),
+                "args": func_calls[0].get("args", {}),
+            }
     
     return None
-
-
-def _detect_goodbye(text: str) -> bool:
-    """Check if agent is saying goodbye (call ending)."""
-    text_lower = text.lower()
-    return any(pattern in text_lower for pattern in GOODBYE_PATTERNS)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -394,8 +352,8 @@ async def _audio_sender(
                 }
                 if session.client_ws.open:
                     await session.client_ws.send(json.dumps(payload))
-                    if cfg.DEBUG:
-                        print(f"[{session.ucid}] 🔊 Sent {len(chunk)} samples to telephony")
+                    # Audio output logging removed - too verbose
+                    # Transcripts show agent speech instead
 
                 # Schedule next send at exactly one chunk_duration later
                 if next_send_time is None:
@@ -421,10 +379,11 @@ async def _gemini_reader(
     Read messages from Gemini Live and buffer audio for the drip-feed sender.
     Does NOT send audio directly — _audio_sender handles paced delivery.
     
-    Also monitors conversation for transfer/hangup decisions:
-    - Detects when agent asks about transfer to sales team
-    - Detects user's yes/no response
-    - Triggers transfer or hangup when agent says goodbye
+    Handles Gemini function calls for call control:
+    - transfer_call(): Gemini decides to transfer to human agent
+    - end_call(): Gemini decides to end the call
+    
+    No regex pattern matching - all decisions made by Gemini AI.
     """
     try:
         async for msg in session.gemini.messages():
@@ -434,8 +393,6 @@ async def _gemini_reader(
 
             if _is_interrupted(msg):
                 # Barge-in: clear the output buffer immediately.
-                # Since _audio_sender drip-feeds at real-time rate, clearing
-                # the buffer stops audio delivery within ~5ms (one poll cycle).
                 if cfg.LOG_TRANSCRIPTS:
                     print(f"[{session.ucid}] 🛑 Gemini interrupted → clearing output buffer")
                 session.output_buffer.clear()
@@ -447,11 +404,30 @@ async def _gemini_reader(
                         "ucid": session.ucid,
                     }
                     await session.client_ws.send(json.dumps(clear_payload))
-                    if cfg.DEBUG:
-                        print(f"[{session.ucid}] 🔇 Sent clear event to telephony")
                 except Exception:
                     pass
                 continue
+
+            # ─────────────────────────────────────────────────────────────────
+            # Handle Gemini function calls (AI-driven call control)
+            # ─────────────────────────────────────────────────────────────────
+            func_call = _extract_function_call(msg)
+            if func_call and not session.hangup_sent:
+                func_name = func_call.get("name")
+                func_args = func_call.get("args", {})
+                reason = func_args.get("reason", "AI decision")
+                
+                if func_name == "transfer_call":
+                    print(f"[{session.ucid}] 🤖 Gemini called transfer_call(): {reason}")
+                    session.user_wants_transfer = True
+                    session.call_ending = True
+                    asyncio.create_task(_handle_call_end(session, cfg))
+                    
+                elif func_name == "end_call":
+                    print(f"[{session.ucid}] 🤖 Gemini called end_call(): {reason}")
+                    session.user_wants_transfer = False
+                    session.call_ending = True
+                    asyncio.create_task(_handle_call_end(session, cfg))
 
             # Capture transcription if present
             transcription = _extract_transcription(msg, debug=cfg.DEBUG)
@@ -460,43 +436,10 @@ async def _gemini_reader(
                 speaker = transcription["speaker"]
                 text = transcription.get("text", "")
                 
+                # Always log transcripts (these are valuable)
                 if cfg.LOG_TRANSCRIPTS:
-                    display_text = text[:50] + "..." if len(text) > 50 else text
+                    display_text = text[:80] + "..." if len(text) > 80 else text
                     print(f"[{session.ucid}] 📝 {speaker}: {display_text}")
-                
-                # ─────────────────────────────────────────────────────────────
-                # Conversation monitoring for transfer/hangup
-                # ─────────────────────────────────────────────────────────────
-                
-                if speaker == "agent":
-                    # Check if agent is asking about transfer to sales
-                    if not session.agent_asked_transfer and _detect_transfer_question(text):
-                        session.agent_asked_transfer = True
-                        if cfg.DEBUG:
-                            print(f"[{session.ucid}] 🔄 Detected transfer question from agent")
-                    
-                    # Check if agent is saying goodbye (call ending)
-                    if _detect_goodbye(text):
-                        session.call_ending = True
-                        if cfg.DEBUG:
-                            print(f"[{session.ucid}] 👋 Detected goodbye from agent")
-                        
-                        # Trigger transfer or hangup if not already done
-                        if not session.hangup_sent:
-                            # Wait a moment for audio to be sent, then trigger call control
-                            asyncio.create_task(
-                                _handle_call_end(session, cfg)
-                            )
-                
-                elif speaker == "user":
-                    # If agent asked about transfer, check user's response
-                    if session.agent_asked_transfer and session.user_wants_transfer is None:
-                        response = _detect_user_response(text)
-                        if response is not None:
-                            session.user_wants_transfer = response
-                            if cfg.DEBUG:
-                                decision = "YES (transfer)" if response else "NO (hangup)"
-                                print(f"[{session.ucid}] 🎯 User transfer decision: {decision}")
 
             audio_b64 = _extract_audio_b64_from_gemini_message(msg)
             if not audio_b64:
@@ -728,8 +671,8 @@ async def handle_client(client_ws, path: str):
                     await session.gemini.send_audio_b64_pcm16(audio_b64)
                     chunks_sent += 1
 
-                if cfg.DEBUG and chunks_sent > 0:
-                    print(f"[{session.ucid}] 🎤 Sent {chunks_sent} audio chunk(s) to Gemini ({len(samples)} samples received)")
+                # Audio chunk logging is too verbose - removed to keep logs clean
+                # Transcripts still show what Gemini hears/says
 
         session.closed = True
         gemini_task.cancel()
