@@ -38,6 +38,45 @@ class GeminiSessionConfig:
     start_of_speech_sensitivity: str = "START_SENSITIVITY_HIGH"
     end_of_speech_sensitivity: str = "END_SENSITIVITY_HIGH"
     
+    # Enable function calling for call control
+    enable_call_control: bool = True
+
+
+# Function declarations for Gemini Live 2.5 to call
+# These are triggered by Gemini based on conversation flow
+CALL_CONTROL_FUNCTIONS = {
+    "function_declarations": [
+        {
+            "name": "transfer_call",
+            "description": "Transfer the call to a human sales agent. Call this ONLY when the user explicitly says YES to speaking with a sales agent or dealer representative.",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "reason": {
+                        "type": "STRING",
+                        "description": "Why the user wants to transfer (e.g., 'User wants to speak with sales team')"
+                    }
+                },
+                "required": ["reason"]
+            }
+        },
+        {
+            "name": "end_call",
+            "description": "End the call gracefully. Call this when the user says NO to speaking with an agent, or when the conversation is complete and user wants to end the call.",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "reason": {
+                        "type": "STRING",
+                        "description": "Why the call is ending (e.g., 'User declined agent transfer', 'Conversation complete')"
+                    }
+                },
+                "required": ["reason"]
+            }
+        }
+    ]
+}
+    
 
 
 class GeminiLiveSession:
@@ -97,6 +136,10 @@ class GeminiLiveSession:
             setup_msg["setup"]["input_audio_transcription"] = {}
         if self.cfg.enable_output_transcription:
             setup_msg["setup"]["output_audio_transcription"] = {}
+        
+        # Enable function calling for transfer/hangup control
+        if self.cfg.enable_call_control:
+            setup_msg["setup"]["tools"] = [CALL_CONTROL_FUNCTIONS]
 
         await self.send_json(setup_msg)
 
