@@ -415,24 +415,37 @@ async def _gemini_reader(
 
             # ─────────────────────────────────────────────────────────────────
             # Handle Gemini 2.5 Live function calls (transfer/hangup)
+            # Note: We set the flag but DON'T hangup yet - wait for turnComplete
+            # so Gemini can finish saying goodbye first
             # ─────────────────────────────────────────────────────────────────
             func_call = _extract_function_call(msg)
-            if func_call and not session.hangup_sent:
+            if func_call and not session.hangup_sent and not session.call_ending:
                 func_name = func_call.get("name")
                 func_args = func_call.get("args", {})
                 reason = func_args.get("reason", "User decision")
                 
                 if func_name == "transfer_call":
                     print(f"[{session.ucid}] 📞 Gemini 2.5 → transfer_call(): {reason}")
+                    print(f"[{session.ucid}] ⏳ Waiting for goodbye message before transfer...")
                     session.user_wants_transfer = True
                     session.call_ending = True
-                    asyncio.create_task(_handle_call_end(session, cfg))
+                    # DON'T call _handle_call_end yet - wait for turnComplete
                     
                 elif func_name == "end_call":
                     print(f"[{session.ucid}] 📞 Gemini 2.5 → end_call(): {reason}")
+                    print(f"[{session.ucid}] ⏳ Waiting for goodbye message before hangup...")
                     session.user_wants_transfer = False
                     session.call_ending = True
-                    asyncio.create_task(_handle_call_end(session, cfg))
+                    # DON'T call _handle_call_end yet - wait for turnComplete
+            
+            # ─────────────────────────────────────────────────────────────────
+            # Handle turnComplete - if call is ending, NOW trigger hangup
+            # This ensures Gemini finishes saying goodbye before we hangup
+            # ─────────────────────────────────────────────────────────────────
+            server_content = msg.get("serverContent", {})
+            if server_content.get("turnComplete") and session.call_ending and not session.hangup_sent:
+                print(f"[{session.ucid}] ✅ Goodbye message complete - triggering call end")
+                asyncio.create_task(_handle_call_end(session, cfg))
 
             # Capture transcription if present
             transcription = _extract_transcription(msg, debug=cfg.DEBUG)
