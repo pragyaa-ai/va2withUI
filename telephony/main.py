@@ -794,7 +794,7 @@ async def handle_client(client_ws, path: str):
         input_buffer=[],
         output_buffer=[],
         conversation=[],
-        start_time=_now_ist(),
+        start_time=datetime.now(timezone.utc),
         waybeo_headers=waybeo_headers if waybeo_headers else None,
     )
 
@@ -968,7 +968,7 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
             print(f"[{session.ucid}] ⚠️ No conversation to save")
         return
 
-    end_time = _now_ist()
+    end_time = datetime.now(timezone.utc)
     duration_sec = int((end_time - session.start_time).total_seconds()) if session.start_time else 0
 
     print(f"[{_ist_str()}] [{session.ucid}] 💾 Saving call data ({len(session.conversation)} entries, {duration_sec}s)")
