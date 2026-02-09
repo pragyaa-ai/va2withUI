@@ -23,7 +23,18 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+# IST timezone (UTC+5:30) for log timestamps
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def _now_ist() -> datetime:
+    """Get current time in IST."""
+    return datetime.now(IST)
+
+def _ist_str() -> str:
+    """Get IST timestamp string for logs."""
+    return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, parse_qs
 
@@ -191,7 +202,7 @@ async def send_transfer_event(session: TelephonySession, transfer_number: str, c
         api_success = await _waybeo_api_command(session, "transfer_call", cfg)
         
         if api_success:
-            print(f"[{session.ucid}] 📞 Transfer sent via Waybeo API → {transfer_number}")
+            print(f"[{_ist_str()}] [{session.ucid}] 📞 Transfer sent via Waybeo API → {transfer_number}")
             return True
         
         # Fallback: Send WebSocket event (legacy, may not work)
@@ -370,7 +381,7 @@ def _extract_transcription(msg: Dict[str, Any], debug: bool = False) -> Optional
         return {
             "speaker": "user",
             "text": input_trans["text"],
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": _now_ist().isoformat(),
         }
     
     # Output transcription (agent speech - contains confirmed/corrected data)
@@ -379,7 +390,7 @@ def _extract_transcription(msg: Dict[str, Any], debug: bool = False) -> Optional
         return {
             "speaker": "agent",
             "text": output_trans["text"],
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": _now_ist().isoformat(),
         }
     
     # Fallback: Check modelTurn for text parts (older API format)
@@ -390,7 +401,7 @@ def _extract_transcription(msg: Dict[str, Any], debug: bool = False) -> Optional
             return {
                 "speaker": "agent",
                 "text": part["text"],
-                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "timestamp": _now_ist().isoformat(),
             }
     
     return None
@@ -641,7 +652,7 @@ async def _handle_call_end(session: TelephonySession, cfg: Config) -> None:
         await asyncio.sleep(0.5)
         
         session.hangup_sent = True
-        event_timestamp = datetime.now().isoformat()
+        event_timestamp = _now_ist().isoformat()
         
         if session.user_wants_transfer:
             # User wants to talk to a sales agent - send transfer event
@@ -671,7 +682,7 @@ async def _handle_call_end(session: TelephonySession, cfg: Config) -> None:
         else:
             # User declined transfer or didn't respond - send hangup
             reason = "User declined agent transfer" if session.user_wants_transfer is False else "Call completed"
-            print(f"[{session.ucid}] 📞 Calling Waybeo hangup API: {reason}")
+            print(f"[{_ist_str()}] [{session.ucid}] 📞 Calling Waybeo hangup API: {reason}")
             await send_hangup_event(session, cfg, reason)
             session.call_control_event = {
                 "type": "hangup",
@@ -762,8 +773,14 @@ async def handle_client(client_ws, path: str):
         if cfg.DEBUG:
             print(f"[telephony] ⚠️ Failed to capture WS headers: {e}")
 
-    if cfg.DEBUG and waybeo_headers:
-        print(f"[telephony] 📋 Waybeo headers received: {list(waybeo_headers.keys())}")
+    if waybeo_headers:
+        print(f"[telephony] 📋 Waybeo headers received:")
+        for hdr_key, hdr_val in waybeo_headers.items():
+            # Mask auth tokens for security, show everything else
+            if "auth" in hdr_key.lower() or "token" in hdr_key.lower():
+                print(f"[telephony]   {hdr_key}: {hdr_val[:20]}...***")
+            else:
+                print(f"[telephony]   {hdr_key}: {hdr_val}")
 
     # Create session with temporary ucid until 'start' arrives
     ucid = "UNKNOWN"
@@ -777,7 +794,7 @@ async def handle_client(client_ws, path: str):
         input_buffer=[],
         output_buffer=[],
         conversation=[],
-        start_time=datetime.utcnow(),
+        start_time=_now_ist(),
         waybeo_headers=waybeo_headers if waybeo_headers else None,
     )
 
@@ -830,9 +847,9 @@ async def handle_client(client_ws, path: str):
         )
 
         if cfg.LOG_TRANSCRIPTS:
-            print(f"[{session.ucid}] 🎬 start event received on path={path}")
+            print(f"[{_ist_str()}] [{session.ucid}] 🎬 start event received on path={path}")
             if session.customer_number:
-                print(f"[{session.ucid}] 📱 Customer number: {session.customer_number}")
+                print(f"[{_ist_str()}] [{session.ucid}] 📱 Customer number: {session.customer_number}")
             if session.store_code:
                 print(f"[{session.ucid}] 🏪 Store code: {session.store_code}")
 
@@ -951,10 +968,10 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
             print(f"[{session.ucid}] ⚠️ No conversation to save")
         return
 
-    end_time = datetime.utcnow()
+    end_time = _now_ist()
     duration_sec = int((end_time - session.start_time).total_seconds()) if session.start_time else 0
 
-    print(f"[{session.ucid}] 💾 Saving call data ({len(session.conversation)} entries, {duration_sec}s)")
+    print(f"[{_ist_str()}] [{session.ucid}] 💾 Saving call data ({len(session.conversation)} entries, {duration_sec}s)")
 
     try:
         # Initialize storage and clients
@@ -977,7 +994,7 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
             metadata={
                 "agent": session.agent,
                 "duration_sec": duration_sec,
-                "start_time": session.start_time.isoformat() + "Z" if session.start_time else None,
+                "start_time": session.start_time.isoformat() if session.start_time else None,
                 "end_time": end_time.isoformat() + "Z",
             },
         )
