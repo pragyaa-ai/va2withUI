@@ -111,6 +111,9 @@ interface VoiceAgent {
   siAuthHeader?: string;
   waybeoEndpointUrl?: string;
   waybeoAuthHeader?: string;
+  // Saved sample payloads for reference
+  siSamplePayload?: object;
+  waybeoSamplePayload?: object;
   createdAt: string;
   updatedAt: string;
 }
@@ -201,6 +204,13 @@ export default function ConfigurationPage() {
         setSiAuthHeader(data.siAuthHeader || "");
         setWaybeoEndpointUrl(data.waybeoEndpointUrl || "");
         setWaybeoAuthHeader(data.waybeoAuthHeader || "");
+        // Load saved sample payloads
+        if (data.siSamplePayload) {
+          setSiSamplePayload(JSON.stringify(data.siSamplePayload, null, 2));
+        }
+        if (data.waybeoSamplePayload) {
+          setWaybeoSamplePayload(JSON.stringify(data.waybeoSamplePayload, null, 2));
+        }
       })
       .finally(() => setLoading(false));
   }, [params.id]);
@@ -230,20 +240,37 @@ export default function ConfigurationPage() {
       return;
     }
     
+    // Parse sample payloads for saving (only include when user has content)
+    // IMPORTANT: Don't send null for sample payloads — it would overwrite existing DB values.
+    // Only include in PATCH body when textarea has content, otherwise omit to preserve DB value.
+    let siSample: object | undefined = undefined;
+    let waybeoSample: object | undefined = undefined;
+    if (siSamplePayload.trim()) {
+      try { siSample = JSON.parse(siSamplePayload); } catch { /* skip - don't overwrite */ }
+    }
+    if (waybeoSamplePayload.trim()) {
+      try { waybeoSample = JSON.parse(waybeoSamplePayload); } catch { /* skip - don't overwrite */ }
+    }
+
+    const patchBody: Record<string, unknown> = {
+      ...form,
+      systemInstructions,
+      siPayloadTemplate: siTemplate,
+      waybeoPayloadTemplate: waybeoTemplate,
+      siCustomerName: siCustomerName || null,
+      siEndpointUrl: siEndpointUrl || null,
+      siAuthHeader: siAuthHeader || null,
+      waybeoEndpointUrl: waybeoEndpointUrl || null,
+      waybeoAuthHeader: waybeoAuthHeader || null,
+    };
+    // Only include sample payloads when they have content (undefined fields are omitted by JSON.stringify)
+    if (siSample !== undefined) patchBody.siSamplePayload = siSample;
+    if (waybeoSample !== undefined) patchBody.waybeoSamplePayload = waybeoSample;
+
     const res = await fetch(`/api/voiceagents/${params.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ 
-        ...form,
-        systemInstructions,
-        siPayloadTemplate: siTemplate,
-        waybeoPayloadTemplate: waybeoTemplate,
-        siCustomerName: siCustomerName || null,
-        siEndpointUrl: siEndpointUrl || null,
-        siAuthHeader: siAuthHeader || null,
-        waybeoEndpointUrl: waybeoEndpointUrl || null,
-        waybeoAuthHeader: waybeoAuthHeader || null,
-      }),
+      body: JSON.stringify(patchBody),
     });
     if (res.ok) {
       const result = await res.json();
