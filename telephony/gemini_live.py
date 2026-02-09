@@ -150,7 +150,7 @@ class GeminiLiveSession:
             self.cfg.service_url, extra_headers=headers, ssl=ssl_context
         )
 
-        # Send setup message
+        # Send setup message (log it for debugging)
         setup_msg = {
             "setup": {
                 "model": self.cfg.model_uri,
@@ -188,6 +188,21 @@ class GeminiLiveSession:
             setup_msg["setup"]["tools"] = [CALL_CONTROL_FUNCTIONS]
 
         await self.send_json(setup_msg)
+        
+        # Wait for setupComplete to confirm Gemini accepted the configuration
+        try:
+            raw = await asyncio.wait_for(self._ws.recv(), timeout=10.0)
+            resp = json.loads(raw)
+            if resp.get("setupComplete"):
+                print("🏁 Gemini setupComplete received")
+            else:
+                print(f"⚠️ Gemini first message was NOT setupComplete: {list(resp.keys())}")
+                # Still usable - push message back? No, just log it.
+                # The messages() iterator will handle subsequent messages.
+        except asyncio.TimeoutError:
+            print("❌ Gemini setup timed out (10s) - no setupComplete received")
+        except Exception as e:
+            print(f"❌ Gemini setup error: {e}")
 
     async def close(self) -> None:
         if self._ws is not None and not self._ws.closed:
@@ -259,7 +274,8 @@ class GeminiLiveSession:
         try:
             async for raw in self._ws:
                 yield json.loads(raw)
-        except ConnectionClosed:
+        except ConnectionClosed as e:
+            print(f"⚠️ Gemini WS closed: code={e.code}, reason={e.reason}")
             return
 
 

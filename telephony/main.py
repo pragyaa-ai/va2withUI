@@ -762,6 +762,8 @@ async def _gemini_reader(
     except Exception as e:
         if cfg.DEBUG:
             print(f"[{session.ucid}] ❌ Gemini reader error: {e}")
+    finally:
+        print(f"[{session.ucid}] ⚠️ Gemini reader exited (conversation entries: {len(session.conversation)})")
 
 
 async def _handle_call_end(session: TelephonySession, cfg: Config) -> None:
@@ -939,6 +941,12 @@ async def handle_client(client_ws, path: str):
             await client_ws.close(code=1008, reason="Expected start event")
             return
 
+        # Log start event body for debugging (shows all data Waybeo sends)
+        if cfg.DEBUG:
+            # Log keys and small values, skip large binary data
+            safe_start = {k: (v if not isinstance(v, (list, bytes)) or len(str(v)) < 200 else f"<{type(v).__name__}:{len(v)}>") for k, v in start_msg.items()}
+            print(f"[telephony] 📦 Start event payload: {json.dumps(safe_start, default=str)}")
+
         # Extract UCID - prioritize start event, then Waybeo headers
         session.ucid = (
             start_msg.get("ucid")
@@ -1039,6 +1047,7 @@ async def handle_client(client_ws, path: str):
                 # Audio chunk logging is too verbose - removed to keep logs clean
                 # Transcripts still show what Gemini hears/says
 
+        print(f"[{session.ucid}] 📞 Main WS loop ended (normal exit)")
         session.closed = True
         gemini_task.cancel()
         sender_task.cancel()
@@ -1056,8 +1065,9 @@ async def handle_client(client_ws, path: str):
 
     except asyncio.TimeoutError:
         await client_ws.close(code=1008, reason="Timeout waiting for start event")
-    except ConnectionClosed:
+    except ConnectionClosed as e:
         # Save data even on connection close
+        print(f"[{session.ucid}] 📞 Waybeo WS closed: code={e.code}, reason={e.reason}")
         await _save_call_data(session, cfg)
     except Exception as e:
         if cfg.DEBUG:
