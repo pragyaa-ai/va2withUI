@@ -15,6 +15,7 @@ const allTabs = [
   { segment: "/guardrails", label: "Guardrails", roles: ["ADMIN"] },
   { segment: "/voice", label: "Voice", roles: ["ADMIN"] },
   { segment: "/telephony", label: "Telephony", roles: ["ADMIN"] },
+  { segment: "/vmn-mapping", label: "VMN Mapping", roles: ["ADMIN"] },
   { segment: "/feedback", label: "Feedback", roles: ["ADMIN", "USER"] },
 ];
 

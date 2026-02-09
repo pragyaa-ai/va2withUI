@@ -410,6 +410,47 @@ async function main() {
     console.log("Created guardrails for Kia v2");
   }
 
+  // Seed VMN to Store Code mappings for Kia v2 (spotlight)
+  const VMN_STORE_CODE_MAP: Record<string, string> = {
+    "+919167246028": "GJ311",
+    "+918879031998": "GJ510",
+    "+918071888810": "10001",
+    "+919619792053": "UK401",
+    "+919167243969": "UP510",
+    "+918879867467": "RJ410",
+    "+919619878225": "JK402",
+    "+919619884921": "RJ302",
+    "+919619952242": "PB308",
+    "+919619884788": "PB304",
+    "+919167268753": "HR309",
+    "+919167245796": "DL407",
+    "+918879847565": "DL413",
+    "+918291134054": "UP411",
+    "+919167235286": "JK401",
+    "+918291564122": "HR410",
+    "+918291575962": "HR302",
+    "+919619920787": "RJ412",
+    "+919167207173": "WB306",
+    "+919619846477": "WB406",
+  };
+
+  console.log("\n📞 Seeding VMN → Store Code mappings for Kia v2...");
+  for (const [vmn, storeCode] of Object.entries(VMN_STORE_CODE_MAP)) {
+    await prisma.vmnMapping.upsert({
+      where: {
+        voiceAgentId_vmn: { voiceAgentId: kiaV2.id, vmn },
+      },
+      update: { storeCode },
+      create: {
+        voiceAgentId: kiaV2.id,
+        vmn,
+        storeCode,
+        effectiveFrom: new Date(),
+      },
+    });
+  }
+  console.log(`  ✅ ${Object.keys(VMN_STORE_CODE_MAP).length} VMN mappings seeded for spotlight`);
+
   // Create/update user accounts
   console.log("\n📝 Creating user accounts...");
   for (const userData of USERS) {

@@ -84,6 +84,10 @@ model VoiceAgent {
   siAuthHeader          String?   // Authorization header value for SI (e.g., "Bearer xxx")
   waybeoEndpointUrl     String?   // Waybeo callback URL
   waybeoAuthHeader      String?   // Authorization header value for Waybeo
+  
+  // Saved sample payloads for reference/comparison
+  siSamplePayload       Json?     // Original SI sample payload used to derive the template
+  waybeoSamplePayload   Json?     // Original Waybeo sample payload used to derive the template
 
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
@@ -93,10 +97,29 @@ model VoiceAgent {
   voiceProfile  VoiceProfile?
   sessions      CallSession[]
   feedback      Feedback[]
+  vmnMappings   VmnMapping[]
 
   @@index([isActive])
   @@index([phoneNumber])
   @@index([slug])
+}
+
+// VMN (Virtual Mobile Number) to Store Code mapping
+// Used to derive dealer/store code from the Kia number the customer dialed
+model VmnMapping {
+  id            String      @id @default(cuid())
+  voiceAgentId  String
+  vmn           String      // Virtual Mobile Number e.g. "+919167243969"
+  storeCode     String      // Dealer/store code e.g. "UP510"
+  effectiveFrom DateTime    @default(now())  // When this mapping became effective
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  voiceAgent    VoiceAgent  @relation(fields: [voiceAgentId], references: [id], onDelete: Cascade)
+
+  @@unique([voiceAgentId, vmn])  // Each VMN can only be mapped once per agent
+  @@index([voiceAgentId])
+  @@index([vmn])
 }
 
 model CallFlow {
@@ -205,6 +228,13 @@ model CallSession {
   
   // Call control event (hangup/transfer sent to Waybeo)
   callControlEvent Json?          // {type: "hangup"|"transfer", reason, timestamp, status}
+  
+  // Webhook API responses (for debugging/display)
+  siWebhookResponse Json?         // {success, status_code, response_body}
+  waybeoWebhookResponse Json?     // {success, status_code, response_body}
+  
+  // Waybeo headers received at call start (contains callid, caller number, store code)
+  waybeoHeaders     Json?         // Raw HTTP headers from Waybeo WebSocket connection
   
   // Legacy meta field
   metaJson      Json?

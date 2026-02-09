@@ -371,30 +371,96 @@ VALID_AGENTS = set(AGENT_PROMPTS.keys())
 # Admin UI API URL for fetching prompts (runs on same VM)
 ADMIN_API_BASE = os.getenv("ADMIN_API_BASE", "http://127.0.0.1:3100")
 
+# Module-level cache for agent config (includes VMN mappings, prompt, webhook endpoints)
+_agent_config_cache: Dict[str, Dict[str, Any]] = {}
 
-def _fetch_prompt_from_api(agent: str) -> Optional[str]:
+
+def _fetch_agent_config_from_api(agent: str) -> Optional[Dict[str, Any]]:
     """
-    Fetch system instructions from Admin UI API.
+    Fetch full agent config from Admin UI API (includes VMN mappings).
+    Caches result for the session lifetime.
     Returns None if API is unavailable or agent not found.
     """
     import urllib.request
     import urllib.error
     
-    url = f"{ADMIN_API_BASE}/api/telephony/prompt/{agent.lower()}"
+    # Return cached config if available
+    agent_lower = agent.lower()
+    if agent_lower in _agent_config_cache:
+        return _agent_config_cache[agent_lower]
+    
+    url = f"{ADMIN_API_BASE}/api/telephony/prompt/{agent_lower}"
     try:
         req = urllib.request.Request(url, method="GET")
         req.add_header("Accept", "application/json")
         with urllib.request.urlopen(req, timeout=5) as resp:
             if resp.status == 200:
                 data = json.loads(resp.read().decode("utf-8"))
-                instructions = data.get("systemInstructions", "")
-                if instructions and instructions.strip():
-                    print(f"[telephony] ✅ Loaded prompt from API for agent: {agent}")
-                    return instructions
+                _agent_config_cache[agent_lower] = data
+                return data
     except urllib.error.HTTPError as e:
         print(f"[telephony] ⚠️ API error for {agent}: HTTP {e.code}")
     except Exception as e:
         print(f"[telephony] ⚠️ API unavailable for {agent}: {e}")
+    return None
+
+
+def _fetch_prompt_from_api(agent: str) -> Optional[str]:
+    """
+    Fetch system instructions from Admin UI API.
+    Returns None if API is unavailable or agent not found.
+    """
+    config = _fetch_agent_config_from_api(agent)
+    if config:
+        instructions = config.get("systemInstructions", "")
+        if instructions and instructions.strip():
+            print(f"[telephony] ✅ Loaded prompt from API for agent: {agent}")
+            vmn_count = len(config.get("vmnMappings", {}))
+            if vmn_count > 0:
+                print(f"[telephony] 📞 VMN mappings loaded: {vmn_count} entries")
+            return instructions
+    return None
+
+
+def _lookup_store_code_by_vmn(agent: str, vmn: Optional[str]) -> Optional[str]:
+    """
+    Look up store code from VMN using the agent's VMN→StoreCode mapping.
+    
+    Args:
+        agent: Agent slug (e.g., "spotlight")
+        vmn: Virtual Mobile Number from Waybeo start event
+        
+    Returns:
+        Store code string or None if no mapping found
+    """
+    if not vmn:
+        return None
+    
+    config = _fetch_agent_config_from_api(agent)
+    if not config:
+        return None
+    
+    vmn_mappings = config.get("vmnMappings", {})
+    if not vmn_mappings:
+        return None
+    
+    # Direct lookup
+    store_code = vmn_mappings.get(vmn)
+    if store_code:
+        print(f"[telephony] 🏪 VMN {vmn} → Store Code: {store_code}")
+        return store_code
+    
+    # Try with/without + prefix
+    if vmn.startswith("+"):
+        store_code = vmn_mappings.get(vmn[1:])
+    else:
+        store_code = vmn_mappings.get(f"+{vmn}")
+    
+    if store_code:
+        print(f"[telephony] 🏪 VMN {vmn} → Store Code: {store_code}")
+        return store_code
+    
+    print(f"[telephony] ⚠️ No store code mapping found for VMN: {vmn}")
     return None
 
 
@@ -984,9 +1050,14 @@ async def handle_client(client_ws, path: str):
             or None
         )
 
-        # Extract store_code from start event or Waybeo headers
+        # Extract store_code: Priority order:
+        # 1. VMN→StoreCode mapping from Admin UI (most reliable)
+        # 2. Explicit store_code in start event
+        # 3. Waybeo headers (legacy)
+        vmn_store_code = _lookup_store_code_by_vmn(agent, session.vmn)
         session.store_code = (
-            start_msg.get("store_code")
+            vmn_store_code
+            or start_msg.get("store_code")
             or start_msg.get("data", {}).get("store_code")
             or waybeo_headers.get("x-waybeo-store-code", "")
             or waybeo_headers.get("X-Waybeo-Store-Code", "")
@@ -1001,7 +1072,8 @@ async def handle_client(client_ws, path: str):
             if session.vmn:
                 print(f"[{_ist_str()}] [{session.ucid}] 📞 VMN (Kia number): {session.vmn}")
             if session.store_code:
-                print(f"[{session.ucid}] 🏪 Store code: {session.store_code}")
+                src = "VMN mapping" if vmn_store_code else "start event"
+                print(f"[{_ist_str()}] [{session.ucid}] 🏪 Store code: {session.store_code} (from {src})")
 
         # Wait for Gemini connection (started earlier for speed)
         await gemini_connect_task

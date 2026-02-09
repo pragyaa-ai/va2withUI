@@ -46,6 +46,9 @@ export const createVoiceAgentSchema = z.object({
   siAuthHeader: z.string().max(500).nullish(),                        // SI Authorization header
   waybeoEndpointUrl: z.string().url().nullish().or(z.literal("")).or(z.null()),  // Waybeo callback URL
   waybeoAuthHeader: z.string().max(500).nullish(),                    // Waybeo Authorization header
+  // Saved sample payloads for reference/comparison
+  siSamplePayload: z.any().nullish(),       // Original SI sample payload
+  waybeoSamplePayload: z.any().nullish(),   // Original Waybeo sample payload
 });
 
 export type CreateVoiceAgentInput = z.infer<typeof createVoiceAgentSchema>;
@@ -86,6 +89,14 @@ export const upsertVoiceProfileSchema = z.object({
 });
 
 export type UpsertVoiceProfileInput = z.infer<typeof upsertVoiceProfileSchema>;
+
+// ---------- VMN Mapping ----------
+export const createVmnMappingSchema = z.object({
+  vmn: z.string().min(1, "VMN is required").max(20).regex(/^\+?\d+$/, "VMN must be a valid phone number"),
+  storeCode: z.string().min(1, "Store code is required").max(20),
+});
+
+export type CreateVmnMappingInput = z.infer<typeof createVmnMappingSchema>;
 
 // ---------- Feedback ----------
 export const createFeedbackSchema = z.object({

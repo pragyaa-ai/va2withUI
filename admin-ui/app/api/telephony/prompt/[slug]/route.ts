@@ -44,6 +44,11 @@ export async function GET(
         siAuthHeader: true,
         waybeoEndpointUrl: true,
         waybeoAuthHeader: true,
+        // VMN to Store Code mappings
+        vmnMappings: {
+          select: { vmn: true, storeCode: true, effectiveFrom: true },
+          orderBy: { effectiveFrom: "desc" as const },
+        },
       },
     });
 
@@ -98,6 +103,14 @@ export async function GET(
       siAuthHeader: agent.siAuthHeader || null,
       waybeoEndpointUrl: agent.waybeoEndpointUrl || null,
       waybeoAuthHeader: agent.waybeoAuthHeader || null,
+      // VMN to Store Code mapping (used by telephony to derive store_code from VMN)
+      vmnMappings: (agent.vmnMappings || []).reduce(
+        (acc: Record<string, string>, m: { vmn: string; storeCode: string }) => {
+          acc[m.vmn] = m.storeCode;
+          return acc;
+        },
+        {} as Record<string, string>
+      ),
     });
   } catch (error) {
     console.error("Error fetching agent prompt:", error);
