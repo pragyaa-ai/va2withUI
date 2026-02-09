@@ -61,6 +61,11 @@ class Config:
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_EXTRACT_MODEL: str = os.getenv("GEMINI_EXTRACT_MODEL", "gemini-2.0-flash")
 
+    # Waybeo API for call control (hangup/transfer)
+    # HTTP API endpoint for sending hangup/transfer commands
+    WAYBEO_API_URL: str = os.getenv("WAYBEO_API_URL", "https://pbx-uat.waybeo.com/bot-call")
+    WAYBEO_AUTH_TOKEN: str = os.getenv("WAYBEO_AUTH_TOKEN", "ewogICJhbGciOiAiSFMyNTYiLAogICJ0eXAiOiAiSldUIgp9.ewogICJzdWIiOiAic3RyZWFtIiwKICAiaWF0IjogMTc1OTQyNDY1MCwKICAiZXhwIjogMTc1OTQyODI1MAp9.wU4YbFUqWjmkXSkABEb3AtsP3TrVsM33C0IxWb2DpZk")
+
     @property
     def AUDIO_BUFFER_SAMPLES_INPUT(self) -> int:
         return int((self.AUDIO_BUFFER_MS_INPUT / 1000.0) * self.TELEPHONY_SR)
@@ -107,6 +112,7 @@ class Config:
         print(f"Data storage: {self.ENABLE_DATA_STORAGE}")
         print(f"Admin push: {self.ENABLE_ADMIN_PUSH}")
         print(f"Gemini Extract API: {'Configured' if self.GEMINI_API_KEY else 'Not configured'}")
+        print(f"Waybeo API: {'Configured' if self.WAYBEO_AUTH_TOKEN else 'Not configured'} ({self.WAYBEO_API_URL})")
         print(f"DEBUG: {self.DEBUG}")
         print("=" * 68)
 

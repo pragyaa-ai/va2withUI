@@ -43,27 +43,52 @@ class GeminiSessionConfig:
 
 
 # Function declarations for Gemini Live 2.5 to call
-# CRITICAL: These should ONLY be called at the VERY END of conversation
-# NEVER at the start, NEVER during info collection, ONLY after transfer question
+# Gemini handles ALL call control decisions based on conversation context.
+# Two scenarios trigger these functions:
+#   1. End of normal flow: after data confirmation → transfer question → user response
+#   2. On-demand: user explicitly asks to talk to a dealer/agent at ANY point
 CALL_CONTROL_FUNCTIONS = {
     "function_declarations": [
         {
             "name": "transfer_call",
-            "description": """Transfer call to human agent. STRICT REQUIREMENTS - ALL must be met:
-- You MUST have already spoken your greeting message
-- You MUST have had at least 5 exchanges with the user
-- You MUST have collected name, email, and car model
-- You MUST have asked about test drive
-- You MUST have confirmed all details with the user
-- You MUST have JUST asked "Would you like to speak with a sales agent?"
-- The user MUST have responded with a clear YES to that specific question
-- If ANY of these conditions is false, DO NOT call this function, just continue the conversation normally""",
+            "description": """Transfer the call to a human sales agent. 
+
+CRITICAL: You MUST follow the EXACT flow before calling this function.
+
+SCENARIO 1 - Normal flow (MANDATORY steps in order):
+  Step 1: Collect ALL 4 data points (name, car model, test drive, email)
+  Step 2: Give a ONE-TIME summary confirmation with ALL collected data
+          Example: "[Name] ji, toh aap [Model] mein interested hain, test drive [haan/nahi], aur email [email/nahi diya]. Sab theek hai?"
+  Step 3: WAIT for user to confirm the summary (YES)
+  Step 4: Ask SEPARATELY: "Kya aap humare Sales Team se baat karna chahenge?" / "Would you like to speak with our Sales Team?"
+  Step 5: WAIT for user to say YES to the transfer question
+  Step 6: ONLY THEN call this function
+
+  DO NOT skip the summary confirmation step.
+  DO NOT skip the transfer question step.
+  DO NOT combine summary and transfer question into one message.
+  The user saying YES to summary confirmation is NOT the same as saying YES to transfer.
+
+SCENARIO 2 - On-demand transfer (ONLY when user EXPLICITLY asks):
+  ONLY call this if the customer uses EXPLICIT transfer phrases like:
+  - "Mujhe kisi se baat karni hai" / "I want to talk to a person"
+  - "Mujhe dealer se baat karni hai" / "Connect me to a dealer"
+  - "Mujhe sales team se baat karni hai" / "Transfer me to sales"
+  - "Kisi insaan se baat karao" / "I want to speak to someone"
+  
+  DO NOT trigger on-demand transfer for:
+  - General purchase interest ("I want to buy a car")
+  - Scheduling requests ("day after tomorrow", "tomorrow")
+  - Information requests ("tell me about", "I want to know")
+  - Any response that is answering YOUR question
+
+After calling this function, say a brief goodbye message and let the system handle the transfer.""",
             "parameters": {
                 "type": "OBJECT",
                 "properties": {
                     "reason": {
                         "type": "STRING",
-                        "description": "Quote the user's exact words that confirm YES to speaking with agent"
+                        "description": "Brief reason: 'Normal flow - user confirmed summary and wants sales team' or 'On-demand - user explicitly asked to talk to a person/dealer'"
                     }
                 },
                 "required": ["reason"]
@@ -71,21 +96,25 @@ CALL_CONTROL_FUNCTIONS = {
         },
         {
             "name": "end_call",
-            "description": """End the call gracefully. STRICT REQUIREMENTS - ALL must be met:
-- You MUST have already spoken your greeting message
-- You MUST have had at least 5 exchanges with the user
-- You MUST have collected name, email, and car model (or user refused to provide)
-- You MUST have asked about test drive
-- You MUST have confirmed all details with the user
-- You MUST have JUST asked "Would you like to speak with a sales agent?"
-- The user MUST have responded with a clear NO to that specific question
-- If ANY of these conditions is false, DO NOT call this function, just continue the conversation normally""",
+            "description": """End the call gracefully after saying goodbye.
+
+Call this function ONLY after ALL of these steps are complete:
+1. All 4 data points collected (name, car model, test drive, email)
+2. Summary confirmation given and user confirmed it
+3. You asked "Would you like to speak with our Sales Team?" as a SEPARATE question
+4. User said NO to the transfer question
+5. You said a brief thank you / goodbye
+
+Do NOT call this function:
+- If the user wants to be transferred (use transfer_call instead)
+- Before giving the summary confirmation
+- Before asking the transfer question""",
             "parameters": {
                 "type": "OBJECT",
                 "properties": {
                     "reason": {
                         "type": "STRING",
-                        "description": "Quote the user's exact words that confirm NO to speaking with agent"
+                        "description": "Brief reason for ending (e.g., 'User declined transfer after summary confirmation, call complete')"
                     }
                 },
                 "required": ["reason"]
@@ -197,6 +226,32 @@ class GeminiLiveSession:
                 }
             }
         )
+
+    async def send_function_response(
+        self,
+        call_id: str,
+        func_name: str,
+        response: dict,
+    ) -> None:
+        """
+        Send a function call response back to Gemini Live.
+        
+        Used to reject premature function calls (e.g., transfer_call before
+        the transfer question has been asked) — Gemini receives the error
+        and continues the conversation properly.
+        """
+        msg = {
+            "tool_response": {
+                "function_responses": [
+                    {
+                        "id": call_id,
+                        "name": func_name,
+                        "response": response,
+                    }
+                ]
+            }
+        }
+        await self.send_json(msg)
 
     async def messages(self) -> AsyncIterator[dict]:
         if not self._ws:

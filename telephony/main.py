@@ -27,6 +27,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, parse_qs
 
+import aiohttp
 import websockets
 from websockets.exceptions import ConnectionClosed
 
@@ -59,6 +60,8 @@ class TelephonySession:
     call_start_time: float = field(default_factory=time.time)  # For safeguard timing
     customer_number: Optional[str] = None
     store_code: Optional[str] = None
+    # Waybeo headers received when call is initiated (for Admin UI display + data extraction)
+    waybeo_headers: Optional[Dict[str, str]] = None
     # Transfer/hangup state (set by Gemini 2.5 Live function calls)
     transfer_number: Optional[str] = None
     user_wants_transfer: Optional[bool] = None
@@ -67,6 +70,9 @@ class TelephonySession:
     # Call control event tracking (for Admin UI)
     call_control_event: Optional[Dict[str, Any]] = None
     waybeo_payload: Optional[Dict[str, Any]] = None
+    # Webhook response tracking (for Admin UI display)
+    si_webhook_response: Optional[Dict[str, Any]] = None
+    waybeo_webhook_response: Optional[Dict[str, Any]] = None
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -87,6 +93,7 @@ def _extract_function_call(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     Extract function call from Gemini Live 2.5 message.
     
     Gemini calls transfer_call() or end_call() based on conversation.
+    Returns dict with name, args, and id (for sending function responses back).
     """
     server_content = msg.get("serverContent", {})
     model_turn = server_content.get("modelTurn", {})
@@ -98,6 +105,7 @@ def _extract_function_call(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return {
                 "name": func_call.get("name"),
                 "args": func_call.get("args", {}),
+                "id": func_call.get("id", ""),
             }
     
     # Alternative: check toolCall at root level
@@ -108,6 +116,7 @@ def _extract_function_call(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return {
                 "name": func_calls[0].get("name"),
                 "args": func_calls[0].get("args", {}),
+                "id": func_calls[0].get("id", ""),
             }
     
     return None
@@ -117,9 +126,57 @@ def _extract_function_call(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 # Telephony Control Events (Waybeo/Ozonetel)
 # ────────────────────────────────────────────────────────────────────────────
 
+async def _waybeo_api_command(session: TelephonySession, command: str, cfg: "Config") -> bool:
+    """
+    Send a command to Waybeo via their HTTP API.
+    
+    Waybeo expects POST to their bot-call endpoint with:
+    {"command": "hangup"|"transfer", "callId": "<ucid>"}
+    
+    Args:
+        session: Current telephony session
+        command: "hangup" or "transfer"
+        cfg: Config instance
+    
+    Returns:
+        True if API call succeeded
+    """
+    if not cfg.WAYBEO_AUTH_TOKEN:
+        print(f"[{session.ucid}] ⚠️ WAYBEO_AUTH_TOKEN not configured - cannot send {command}")
+        return False
+    
+    api_url = cfg.WAYBEO_API_URL
+    payload = {
+        "command": command,
+        "callId": session.ucid,
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as http_session:
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {cfg.WAYBEO_AUTH_TOKEN}",
+            }
+            print(f"[{session.ucid}] 🔄 Waybeo API → {command} (POST {api_url})")
+            async with http_session.post(api_url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                resp_text = await resp.text()
+                if resp.status < 300:
+                    print(f"[{session.ucid}] ✅ Waybeo {command} API success: HTTP {resp.status}")
+                    return True
+                else:
+                    print(f"[{session.ucid}] ❌ Waybeo {command} API failed: HTTP {resp.status} - {resp_text[:200]}")
+                    return False
+    except Exception as e:
+        print(f"[{session.ucid}] ❌ Waybeo {command} API error: {e}")
+        return False
+
+
 async def send_transfer_event(session: TelephonySession, transfer_number: str, cfg: "Config") -> bool:
     """
-    Send transfer event to telephony provider (Waybeo).
+    Send transfer command to Waybeo via HTTP API.
+    
+    Uses Waybeo's bot-call HTTP endpoint (same as singleinterface).
+    WebSocket stays open - Waybeo closes it after transfer completes.
     
     Args:
         session: Current telephony session
@@ -130,6 +187,15 @@ async def send_transfer_event(session: TelephonySession, transfer_number: str, c
         True if event sent successfully
     """
     try:
+        # Primary: Use Waybeo HTTP API (correct protocol)
+        api_success = await _waybeo_api_command(session, "transfer", cfg)
+        
+        if api_success:
+            print(f"[{session.ucid}] 📞 Transfer sent via Waybeo API → {transfer_number}")
+            return True
+        
+        # Fallback: Send WebSocket event (legacy, may not work)
+        print(f"[{session.ucid}] ⚠️ Waybeo API failed, trying WebSocket fallback...")
         transfer_payload = {
             "event": "transfer",
             "ucid": session.ucid,
@@ -137,9 +203,7 @@ async def send_transfer_event(session: TelephonySession, transfer_number: str, c
             "reason": "Customer requested transfer to dealer",
         }
         await session.client_ws.send(json.dumps(transfer_payload))
-        session.transfer_requested = True
-        session.transfer_number = transfer_number
-        print(f"[{session.ucid}] 📞 Transfer event sent → {transfer_number}")
+        print(f"[{session.ucid}] 📞 Transfer event sent via WebSocket → {transfer_number}")
         return True
     except Exception as e:
         if cfg.DEBUG:
@@ -149,7 +213,10 @@ async def send_transfer_event(session: TelephonySession, transfer_number: str, c
 
 async def send_hangup_event(session: TelephonySession, cfg: "Config", reason: str = "Call completed") -> bool:
     """
-    Send hangup event to telephony provider (Waybeo).
+    Send hangup command to Waybeo via HTTP API, then close WebSocket.
+    
+    Uses Waybeo's bot-call HTTP endpoint for the hangup command,
+    then closes the WebSocket connection as final cleanup.
     
     Args:
         session: Current telephony session
@@ -160,13 +227,35 @@ async def send_hangup_event(session: TelephonySession, cfg: "Config", reason: st
         True if event sent successfully
     """
     try:
-        hangup_payload = {
-            "event": "hangup",
-            "ucid": session.ucid,
-            "reason": reason,
-        }
-        await session.client_ws.send(json.dumps(hangup_payload))
-        print(f"[{session.ucid}] 📞 Hangup event sent: {reason}")
+        # Primary: Use Waybeo HTTP API (correct protocol)
+        api_success = await _waybeo_api_command(session, "hangup", cfg)
+        
+        if api_success:
+            print(f"[{session.ucid}] 📞 Hangup sent via Waybeo API: {reason}")
+        else:
+            # Fallback: Send WebSocket event (legacy)
+            print(f"[{session.ucid}] ⚠️ Waybeo API hangup failed, trying WebSocket fallback...")
+            try:
+                hangup_payload = {
+                    "event": "hangup",
+                    "ucid": session.ucid,
+                    "reason": reason,
+                }
+                await session.client_ws.send(json.dumps(hangup_payload))
+                print(f"[{session.ucid}] 📞 Hangup sent via WebSocket: {reason}")
+            except Exception:
+                pass
+        
+        # Close the WebSocket connection to ensure call ends
+        # This is the definitive way to end the call - closing the WS
+        # signals to Waybeo that the bot is done
+        try:
+            if session.client_ws.open:
+                await session.client_ws.close(code=1000, reason=reason)
+                print(f"[{session.ucid}] 📞 WebSocket closed (hangup)")
+        except Exception as close_err:
+            print(f"[{session.ucid}] ⚠️ WebSocket close error: {close_err}")
+        
         return True
     except Exception as e:
         if cfg.DEBUG:
@@ -420,39 +509,65 @@ async def _gemini_reader(
 
             # ─────────────────────────────────────────────────────────────────
             # Handle Gemini 2.5 Live function calls (transfer/hangup)
-            # Note: We set the flag but DON'T hangup yet - wait for turnComplete
-            # so Gemini can finish saying goodbye first
-            # SAFEGUARD: Ignore function calls that happen too early
+            #
+            # DESIGN: Trust Gemini 2.5's intelligence for ALL call control.
+            # Gemini understands the full conversation context — it knows
+            # what questions were asked and what the user responded.
+            # NO transcript matching, NO keyword checking — just trust Gemini.
+            #
+            # Flow: Gemini calls function → we acknowledge → Gemini says
+            # goodbye → turnComplete → we send hangup/transfer to telephony
             # ─────────────────────────────────────────────────────────────────
             func_call = _extract_function_call(msg)
             if func_call and not session.hangup_sent and not session.call_ending:
                 func_name = func_call.get("name")
                 func_args = func_call.get("args", {})
+                func_id = func_call.get("id", "")
                 reason = func_args.get("reason", "User decision")
-                
-                # SAFEGUARD: Count user turns in conversation to prevent early triggers
-                user_turns = sum(1 for c in session.conversation if c.get("speaker") == "user")
                 call_duration = time.time() - session.call_start_time
                 
-                # Ignore function calls if:
-                # 1. Call is less than 30 seconds old, OR
-                # 2. We have less than 3 user turns (not enough conversation)
-                if call_duration < 30 or user_turns < 3:
-                    print(f"[{session.ucid}] ⚠️ IGNORED {func_name}() - too early (duration={call_duration:.0f}s, user_turns={user_turns})")
-                    # Don't use continue! Let audio/transcription processing happen below
+                # Minimal safeguard: reject only during initial WebSocket setup (<10s)
+                # After that, trust Gemini completely — including on-demand transfer
+                if call_duration < 10:
+                    print(f"[{session.ucid}] ⚠️ REJECTED {func_name}() - too early ({call_duration:.0f}s, still setting up)")
+                    try:
+                        await session.gemini.send_function_response(
+                            call_id=func_id,
+                            func_name=func_name,
+                            response={"error": "Call just started. Continue the conversation first."},
+                        )
+                    except Exception as e:
+                        print(f"[{session.ucid}] ⚠️ Failed to send function rejection: {e}")
+                
                 elif func_name == "transfer_call":
                     print(f"[{session.ucid}] 📞 Gemini 2.5 → transfer_call(): {reason}")
-                    print(f"[{session.ucid}] ⏳ Waiting for goodbye message before transfer...")
                     session.user_wants_transfer = True
                     session.call_ending = True
-                    # DON'T call _handle_call_end yet - wait for turnComplete
+                    # Send function response so Gemini can say goodbye
+                    try:
+                        await session.gemini.send_function_response(
+                            call_id=func_id,
+                            func_name=func_name,
+                            response={"status": "ok", "action": "transferring to sales team"},
+                        )
+                    except Exception as e:
+                        print(f"[{session.ucid}] ⚠️ Failed to send function response: {e}")
+                    print(f"[{session.ucid}] ⏳ Waiting for goodbye message before transfer...")
                     
                 elif func_name == "end_call":
                     print(f"[{session.ucid}] 📞 Gemini 2.5 → end_call(): {reason}")
-                    print(f"[{session.ucid}] ⏳ Waiting for goodbye message before hangup...")
                     session.user_wants_transfer = False
                     session.call_ending = True
-                    # DON'T call _handle_call_end yet - wait for turnComplete
+                    # Send function response so Gemini can say goodbye
+                    try:
+                        await session.gemini.send_function_response(
+                            call_id=func_id,
+                            func_name=func_name,
+                            response={"status": "ok", "action": "ending call gracefully"},
+                        )
+                    except Exception as e:
+                        print(f"[{session.ucid}] ⚠️ Failed to send function response: {e}")
+                    print(f"[{session.ucid}] ⏳ Waiting for goodbye message before hangup...")
             
             # ─────────────────────────────────────────────────────────────────
             # Handle turnComplete - if call is ending, NOW trigger hangup
@@ -619,14 +734,36 @@ async def handle_client(client_ws, path: str):
         model_uri=cfg.model_uri,
         voice=cfg.GEMINI_VOICE,
         system_instructions=prompt,
-        temperature=1.0,  # Default: natural, conversational responses (Artemis-style)
-        enable_affective_dialog=True,  # Enabled: natural vocal prosody (warmth without excitement)
+        temperature=0.7,  # Lower temperature for more measured, professional responses
+        enable_affective_dialog=False,  # Disabled: prevent excited/emotional voice variations
         enable_input_transcription=True,   # Enable for transcript capture
         enable_output_transcription=True,  # Enable for transcript capture
         vad_silence_ms=150,   # Aggressive for fast barge-in detection
         vad_prefix_ms=100,    # Low prefix for faster activity detection onset
         activity_handling="START_OF_ACTIVITY_INTERRUPTS",
     )
+
+    # ─────────────────────────────────────────────────────────────────
+    # Capture Waybeo WebSocket headers (sent when call is initiated)
+    # These contain: call_id, customer_number, store_code, etc.
+    # ─────────────────────────────────────────────────────────────────
+    waybeo_headers: Dict[str, str] = {}
+    try:
+        # websockets v12+: request_headers is a Headers object
+        raw_headers = getattr(client_ws, "request_headers", None)
+        if raw_headers:
+            waybeo_headers = {k: v for k, v in raw_headers.raw_items()}
+        else:
+            # Fallback: try request.headers (newer websockets API)
+            request = getattr(client_ws, "request", None)
+            if request and hasattr(request, "headers"):
+                waybeo_headers = {k: v for k, v in request.headers.raw_items()}
+    except Exception as e:
+        if cfg.DEBUG:
+            print(f"[telephony] ⚠️ Failed to capture WS headers: {e}")
+
+    if cfg.DEBUG and waybeo_headers:
+        print(f"[telephony] 📋 Waybeo headers received: {list(waybeo_headers.keys())}")
 
     # Create session with temporary ucid until 'start' arrives
     ucid = "UNKNOWN"
@@ -641,6 +778,7 @@ async def handle_client(client_ws, path: str):
         output_buffer=[],
         conversation=[],
         start_time=datetime.utcnow(),
+        waybeo_headers=waybeo_headers if waybeo_headers else None,
     )
 
     try:
@@ -658,15 +796,45 @@ async def handle_client(client_ws, path: str):
             await client_ws.close(code=1008, reason="Expected start event")
             return
 
+        # Extract UCID - prioritize start event, then Waybeo headers
         session.ucid = (
             start_msg.get("ucid")
             or start_msg.get("start", {}).get("ucid")
             or start_msg.get("data", {}).get("ucid")
+            or waybeo_headers.get("x-waybeo-ucid", "")
+            or waybeo_headers.get("X-Waybeo-Ucid", "")
+            or waybeo_headers.get("ucid", "")
             or "UNKNOWN"
+        )
+
+        # Extract customer_number from start event or Waybeo headers
+        session.customer_number = (
+            start_msg.get("customer_number")
+            or start_msg.get("data", {}).get("customer_number")
+            or start_msg.get("caller_number")
+            or start_msg.get("data", {}).get("caller_number")
+            or waybeo_headers.get("x-waybeo-caller-number", "")
+            or waybeo_headers.get("X-Waybeo-Caller-Number", "")
+            or waybeo_headers.get("caller_number", "")
+            or None
+        )
+
+        # Extract store_code from start event or Waybeo headers
+        session.store_code = (
+            start_msg.get("store_code")
+            or start_msg.get("data", {}).get("store_code")
+            or waybeo_headers.get("x-waybeo-store-code", "")
+            or waybeo_headers.get("X-Waybeo-Store-Code", "")
+            or waybeo_headers.get("store_code", "")
+            or None
         )
 
         if cfg.LOG_TRANSCRIPTS:
             print(f"[{session.ucid}] 🎬 start event received on path={path}")
+            if session.customer_number:
+                print(f"[{session.ucid}] 📱 Customer number: {session.customer_number}")
+            if session.store_code:
+                print(f"[{session.ucid}] 🏪 Store code: {session.store_code}")
 
         # Wait for Gemini connection (started earlier for speed)
         await gemini_connect_task
@@ -939,34 +1107,27 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
         # the template doesn't include agent_slug
         if isinstance(si_payload, dict):
             si_payload["agent_slug"] = session.agent
-            
-            # Include waybeo_payload and call_control_event for Admin UI (v0.6+)
-            if session.waybeo_payload:
-                si_payload["waybeo_payload"] = session.waybeo_payload
-            if session.call_control_event:
-                si_payload["call_control_event"] = session.call_control_event
 
-        # Save SI payload to local file
-        storage.save_si_payload(session.ucid, si_payload)
+        # The CLEAN SI payload (no extra Admin UI fields) - this is what gets sent to SI webhook
+        si_webhook_payload = dict(si_payload) if isinstance(si_payload, dict) else si_payload
 
-        # Push to Admin UI database - includes SI payload, waybeo payload, and call control event
-        await admin_client.push_call_data(si_payload, session.ucid)
+        # Save clean SI payload to local file
+        storage.save_si_payload(session.ucid, si_webhook_payload)
 
-        # Deliver to external webhooks if configured
+        # Deliver to external webhooks if configured (before Admin UI push to capture responses)
         if agent_config:
-            si_webhook_payload = si_payload  # Same payload that was saved to DB
-
             # SI webhook
             si_endpoint = agent_config.get("siEndpointUrl")
             si_auth = agent_config.get("siAuthHeader")
             if si_endpoint:
                 print(f"[{session.ucid}] 📤 Delivering to SI webhook: {si_endpoint[:50]}...")
-                await admin_client.push_to_si_webhook(
+                si_result = await admin_client.push_to_si_webhook(
                     payload=si_webhook_payload,
                     endpoint_url=si_endpoint,
                     auth_header=si_auth,
                     call_id=session.ucid,
                 )
+                session.si_webhook_response = si_result
 
             # Waybeo webhook
             waybeo_endpoint = agent_config.get("waybeoEndpointUrl")
@@ -999,20 +1160,47 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
                 session.waybeo_payload = waybeo_payload
                 
                 print(f"[{session.ucid}] 📤 Delivering to Waybeo webhook: {waybeo_endpoint[:50]}...")
-                await admin_client.push_to_waybeo_webhook(
+                waybeo_result = await admin_client.push_to_waybeo_webhook(
                     payload=waybeo_payload,
                     endpoint_url=waybeo_endpoint,
                     auth_header=waybeo_auth,
                     call_id=session.ucid,
                 )
-            
-            # Update Admin UI with waybeo payload (even if not sending to endpoint)
-            if session.waybeo_payload or session.call_control_event:
-                # Re-push with updated data
-                si_payload_updated = dict(si_payload) if isinstance(si_payload, dict) else {}
-                si_payload_updated["waybeo_payload"] = session.waybeo_payload
-                si_payload_updated["call_control_event"] = session.call_control_event
-                await admin_client.push_call_data(si_payload_updated, session.ucid)
+                session.waybeo_webhook_response = waybeo_result
+
+        # Generate summary and sentiment using Gemini 2.0 Flash
+        summary_data = {"summary": None, "sentiment": None, "sentimentScore": None}
+        if cfg_instance.GEMINI_API_KEY and transcript_conversation:
+            try:
+                print(f"[{session.ucid}] 📝 Generating call summary & sentiment...")
+                summary_data = await extractor.generate_summary_and_sentiment(
+                    conversation=transcript_conversation,
+                )
+                if summary_data.get("summary"):
+                    print(f"[{session.ucid}] ✅ Summary generated - sentiment: {summary_data.get('sentiment')}")
+                else:
+                    print(f"[{session.ucid}] ⚠️ Summary generation returned empty")
+            except Exception as e:
+                print(f"[{session.ucid}] ⚠️ Summary generation error: {e}")
+
+        # Build Admin UI payload with extra tracking fields
+        admin_payload = dict(si_webhook_payload) if isinstance(si_webhook_payload, dict) else {}
+        admin_payload["waybeo_payload"] = session.waybeo_payload
+        admin_payload["call_control_event"] = session.call_control_event
+        # Store webhook responses for Admin UI display
+        admin_payload["si_webhook_response"] = session.si_webhook_response
+        admin_payload["waybeo_webhook_response"] = session.waybeo_webhook_response
+        # Include Waybeo headers received at call start (for Admin UI display)
+        admin_payload["waybeo_headers"] = session.waybeo_headers
+        # Include transcript for Admin UI storage and display
+        admin_payload["transcript"] = transcript_conversation
+        # Include pre-generated summary and sentiment (avoids needing API key in admin-ui)
+        admin_payload["summary"] = summary_data.get("summary")
+        admin_payload["sentiment"] = summary_data.get("sentiment")
+        admin_payload["sentimentScore"] = summary_data.get("sentimentScore")
+
+        # Push to Admin UI database
+        await admin_client.push_call_data(admin_payload, session.ucid)
 
     except Exception as e:
         print(f"[{session.ucid}] ❌ Error saving call data: {e}")
