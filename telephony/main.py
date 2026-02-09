@@ -262,7 +262,7 @@ async def _waybeo_api_command(session: TelephonySession, command: str, cfg: "Con
         return False
 
 
-async def send_transfer_event(session: TelephonySession, transfer_number: str, cfg: "Config") -> bool:
+async def send_transfer_event(session: TelephonySession, transfer_number: Optional[str], cfg: "Config") -> bool:
     """
     Send transfer command to Waybeo via HTTP API.
     
@@ -271,7 +271,7 @@ async def send_transfer_event(session: TelephonySession, transfer_number: str, c
     
     Args:
         session: Current telephony session
-        transfer_number: Phone number to transfer to (dealer)
+        transfer_number: Optional phone number (legacy WS fallback only)
         cfg: Config instance
         
     Returns:
@@ -282,20 +282,24 @@ async def send_transfer_event(session: TelephonySession, transfer_number: str, c
         api_success = await _waybeo_api_command(session, "transfer_call", cfg)
         
         if api_success:
-            print(f"[{_ist_str()}] [{session.ucid}] 📞 Transfer sent via Waybeo API → {transfer_number}")
+            print(f"[{_ist_str()}] [{session.ucid}] 📞 Transfer sent via Waybeo API")
             return True
         
-        # Fallback: Send WebSocket event (legacy, may not work)
-        print(f"[{session.ucid}] ⚠️ Waybeo API failed, trying WebSocket fallback...")
-        transfer_payload = {
-            "event": "transfer",
-            "ucid": session.ucid,
-            "phone": transfer_number,
-            "reason": "Customer requested transfer to dealer",
-        }
-        await session.client_ws.send(json.dumps(transfer_payload))
-        print(f"[{session.ucid}] 📞 Transfer event sent via WebSocket → {transfer_number}")
-        return True
+        # Fallback: Send WebSocket event (legacy, may not work). Requires number.
+        if transfer_number:
+            print(f"[{session.ucid}] ⚠️ Waybeo API failed, trying WebSocket fallback...")
+            transfer_payload = {
+                "event": "transfer",
+                "ucid": session.ucid,
+                "phone": transfer_number,
+                "reason": "Customer requested transfer to dealer",
+            }
+            await session.client_ws.send(json.dumps(transfer_payload))
+            print(f"[{session.ucid}] 📞 Transfer event sent via WebSocket → {transfer_number}")
+            return True
+
+        print(f"[{session.ucid}] ⚠️ Waybeo API failed and no transfer number configured for WS fallback")
+        return False
     except Exception as e:
         if cfg.DEBUG:
             print(f"[{session.ucid}] ❌ Failed to send transfer event: {e}")
@@ -788,29 +792,17 @@ async def _handle_call_end(session: TelephonySession, cfg: Config) -> None:
         
         if session.user_wants_transfer:
             # User wants to talk to a sales agent - send transfer event
-            # Get dealer number from agent config if available
+            # Waybeo transfer_call uses only UCID; number is not required
             transfer_number = session.transfer_number or os.getenv("DEFAULT_TRANSFER_NUMBER", "")
-            
-            if transfer_number:
-                print(f"[{session.ucid}] 📞 User requested transfer → calling Waybeo transfer API")
-                await send_transfer_event(session, transfer_number, cfg)
-                session.call_control_event = {
-                    "type": "transfer",
-                    "reason": "User requested to speak with sales agent",
-                    "timestamp": event_timestamp,
-                    "status": "sent",
-                    "transfer_number": transfer_number,
-                }
-            else:
-                # No transfer number configured, just hangup
-                print(f"[{session.ucid}] ⚠️ Transfer requested but no number configured → hangup")
-                await send_hangup_event(session, cfg, "Transfer requested but no number configured")
-                session.call_control_event = {
-                    "type": "hangup",
-                    "reason": "Transfer requested but no number configured",
-                    "timestamp": event_timestamp,
-                    "status": "sent",
-                }
+            print(f"[{session.ucid}] 📞 User requested transfer → calling Waybeo transfer API")
+            transfer_ok = await send_transfer_event(session, transfer_number or None, cfg)
+            session.call_control_event = {
+                "type": "transfer",
+                "reason": "User requested to speak with sales agent",
+                "timestamp": event_timestamp,
+                "status": "sent" if transfer_ok else "failed",
+                "transfer_number": transfer_number or None,
+            }
         else:
             # User declined transfer or didn't respond - send hangup
             reason = "User declined agent transfer" if session.user_wants_transfer is False else "Call completed"
