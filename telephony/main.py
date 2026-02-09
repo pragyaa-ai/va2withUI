@@ -78,6 +78,13 @@ class TelephonySession:
     user_wants_transfer: Optional[bool] = None
     call_ending: bool = False
     hangup_sent: bool = False
+    # Recent turn tracking (for transfer question validation)
+    last_user_text: Optional[str] = None
+    last_user_at: Optional[float] = None
+    last_agent_text: Optional[str] = None
+    transfer_question_asked_at: Optional[float] = None
+    transfer_question_answered: bool = False
+    last_transfer_answer_text: Optional[str] = None
     # Call control event tracking (for Admin UI)
     call_control_event: Optional[Dict[str, Any]] = None
     waybeo_payload: Optional[Dict[str, Any]] = None
@@ -131,6 +138,79 @@ def _extract_function_call(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
     
     return None
+
+
+def _normalize_text(text: Optional[str]) -> str:
+    return (text or "").strip().lower()
+
+
+def _is_affirmative(text: Optional[str]) -> bool:
+    normalized = _normalize_text(text)
+    return normalized in {
+        "yes",
+        "y",
+        "yeah",
+        "yep",
+        "haan",
+        "ha",
+        "han",
+        "ji",
+        "haa",
+        "bilkul",
+        "haan ji",
+    }
+
+
+def _is_negative(text: Optional[str]) -> bool:
+    normalized = _normalize_text(text)
+    return normalized in {
+        "no",
+        "n",
+        "nope",
+        "nah",
+        "nahi",
+        "nahin",
+        "nahi ji",
+        "mat",
+    }
+
+
+def _is_explicit_transfer_request(text: Optional[str]) -> bool:
+    normalized = _normalize_text(text)
+    if not normalized:
+        return False
+    transfer_phrases = [
+        "talk to a person",
+        "talk to someone",
+        "talk to sales",
+        "talk to agent",
+        "talk to dealer",
+        "connect me to",
+        "connect to dealer",
+        "connect to sales",
+        "speak to",
+        "kisi se baat",
+        "agent se baat",
+        "dealer se baat",
+        "sales team se baat",
+        "insaan se baat",
+        "baat karao",
+        "baat karni hai",
+    ]
+    return any(phrase in normalized for phrase in transfer_phrases)
+
+
+def _is_transfer_question(text: Optional[str]) -> bool:
+    normalized = _normalize_text(text)
+    if not normalized:
+        return False
+    return (
+        "sales team" in normalized
+        or "speak with our sales" in normalized
+        or "sales team se baat" in normalized
+        or "sales team se baat karna chahenge" in normalized
+        or "sales team se baat karna chahenge?" in normalized
+    )
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -549,8 +629,36 @@ async def _gemini_reader(
                         )
                     except Exception as e:
                         print(f"[{session.ucid}] ⚠️ Failed to send function rejection: {e}")
+                    continue
+
+                async def _reject_call(message: str) -> None:
+                    print(f"[{session.ucid}] ⚠️ REJECTED {func_name}() - {message}")
+                    try:
+                        await session.gemini.send_function_response(
+                            call_id=func_id,
+                            func_name=func_name,
+                            response={"error": message},
+                        )
+                    except Exception as e:
+                        print(f"[{session.ucid}] ⚠️ Failed to send function rejection: {e}")
                 
-                elif func_name == "transfer_call":
+                if func_name == "transfer_call":
+                    allow_transfer = False
+                    if _is_explicit_transfer_request(session.last_user_text):
+                        allow_transfer = True
+                    elif (
+                        session.transfer_question_asked_at
+                        and session.transfer_question_answered
+                        and _is_affirmative(session.last_transfer_answer_text)
+                    ):
+                        allow_transfer = True
+
+                    if not allow_transfer:
+                        await _reject_call(
+                            "Transfer requires explicit user YES to the Sales Team question or a direct transfer request."
+                        )
+                        continue
+
                     print(f"[{session.ucid}] 📞 Gemini 2.5 → transfer_call(): {reason}")
                     session.user_wants_transfer = True
                     session.call_ending = True
@@ -566,6 +674,17 @@ async def _gemini_reader(
                     print(f"[{session.ucid}] ⏳ Waiting for goodbye message before transfer...")
                     
                 elif func_name == "end_call":
+                    allow_end = (
+                        session.transfer_question_asked_at
+                        and session.transfer_question_answered
+                        and _is_negative(session.last_transfer_answer_text)
+                    )
+                    if not allow_end:
+                        await _reject_call(
+                            "End call requires explicit user NO to the Sales Team question."
+                        )
+                        continue
+
                     print(f"[{session.ucid}] 📞 Gemini 2.5 → end_call(): {reason}")
                     session.user_wants_transfer = False
                     session.call_ending = True
@@ -595,6 +714,19 @@ async def _gemini_reader(
                 session.conversation.append(transcription)
                 speaker = transcription["speaker"]
                 text = transcription.get("text", "")
+
+                if speaker == "user":
+                    session.last_user_text = text
+                    session.last_user_at = time.time()
+                    if session.transfer_question_asked_at and not session.transfer_question_answered:
+                        session.transfer_question_answered = True
+                        session.last_transfer_answer_text = text
+                elif speaker == "agent":
+                    session.last_agent_text = text
+                    if _is_transfer_question(text):
+                        session.transfer_question_asked_at = time.time()
+                        session.transfer_question_answered = False
+                        session.last_transfer_answer_text = None
                 
                 # Always log transcripts (these are valuable)
                 if cfg.LOG_TRANSCRIPTS:
@@ -749,9 +881,11 @@ async def handle_client(client_ws, path: str):
         enable_affective_dialog=False,  # Disabled: prevent excited/emotional voice variations
         enable_input_transcription=True,   # Enable for transcript capture
         enable_output_transcription=True,  # Enable for transcript capture
-        vad_silence_ms=150,   # Aggressive for fast barge-in detection
-        vad_prefix_ms=100,    # Low prefix for faster activity detection onset
+        vad_silence_ms=300,   # Less aggressive to reduce dropped turns
+        vad_prefix_ms=200,    # Slightly higher prefix for stability
         activity_handling="START_OF_ACTIVITY_INTERRUPTS",
+        start_of_speech_sensitivity="START_SENSITIVITY_MEDIUM",
+        end_of_speech_sensitivity="END_SENSITIVITY_MEDIUM",
     )
 
     # ─────────────────────────────────────────────────────────────────
