@@ -131,11 +131,11 @@ async def _waybeo_api_command(session: TelephonySession, command: str, cfg: "Con
     Send a command to Waybeo via their HTTP API.
     
     Waybeo expects POST to their bot-call endpoint with:
-    {"command": "hangup"|"transfer", "callId": "<ucid>"}
+    {"command": "hangup_call"|"transfer_call", "callId": "<ucid>"}
     
     Args:
         session: Current telephony session
-        command: "hangup" or "transfer"
+        command: "hangup_call" or "transfer_call"
         cfg: Config instance
     
     Returns:
@@ -188,7 +188,7 @@ async def send_transfer_event(session: TelephonySession, transfer_number: str, c
     """
     try:
         # Primary: Use Waybeo HTTP API (correct protocol)
-        api_success = await _waybeo_api_command(session, "transfer", cfg)
+        api_success = await _waybeo_api_command(session, "transfer_call", cfg)
         
         if api_success:
             print(f"[{session.ucid}] 📞 Transfer sent via Waybeo API → {transfer_number}")
@@ -228,7 +228,7 @@ async def send_hangup_event(session: TelephonySession, cfg: "Config", reason: st
     """
     try:
         # Primary: Use Waybeo HTTP API (correct protocol)
-        api_success = await _waybeo_api_command(session, "hangup", cfg)
+        api_success = await _waybeo_api_command(session, "hangup_call", cfg)
         
         if api_success:
             print(f"[{session.ucid}] 📞 Hangup sent via Waybeo API: {reason}")
