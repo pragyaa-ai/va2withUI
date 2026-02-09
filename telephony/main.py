@@ -71,8 +71,9 @@ class TelephonySession:
     call_start_time: float = field(default_factory=time.time)  # For safeguard timing
     customer_number: Optional[str] = None
     store_code: Optional[str] = None
-    # Waybeo headers received when call is initiated (for Admin UI display + data extraction)
+    # Waybeo call metadata from start event
     waybeo_headers: Optional[Dict[str, str]] = None
+    vmn: Optional[str] = None  # Virtual Mobile Number (the Kia number the customer called)
     # Transfer/hangup state (set by Gemini 2.5 Live function calls)
     transfer_number: Optional[str] = None
     user_wants_transfer: Optional[bool] = None
@@ -958,15 +959,28 @@ async def handle_client(client_ws, path: str):
             or "UNKNOWN"
         )
 
-        # Extract customer_number from start event or Waybeo headers
+        # Extract customer_number from start event (Waybeo sends it as "did")
         session.customer_number = (
-            start_msg.get("customer_number")
-            or start_msg.get("data", {}).get("customer_number")
+            start_msg.get("did")  # Waybeo sends customer number in "did" field
+            or start_msg.get("customer_number")
             or start_msg.get("caller_number")
+            or start_msg.get("customerId")
+            or start_msg.get("From")
+            or start_msg.get("customer_mobile")
+            or start_msg.get("data", {}).get("did")
+            or start_msg.get("data", {}).get("customer_number")
             or start_msg.get("data", {}).get("caller_number")
+            or start_msg.get("start", {}).get("did")
             or waybeo_headers.get("x-waybeo-caller-number", "")
             or waybeo_headers.get("X-Waybeo-Caller-Number", "")
-            or waybeo_headers.get("caller_number", "")
+            or None
+        )
+
+        # Extract VMN (Virtual Mobile Number - the Kia number the customer dialed)
+        session.vmn = (
+            start_msg.get("vmn")
+            or start_msg.get("data", {}).get("vmn")
+            or start_msg.get("start", {}).get("vmn")
             or None
         )
 
@@ -983,7 +997,9 @@ async def handle_client(client_ws, path: str):
         if cfg.LOG_TRANSCRIPTS:
             print(f"[{_ist_str()}] [{session.ucid}] 🎬 start event received on path={path}")
             if session.customer_number:
-                print(f"[{_ist_str()}] [{session.ucid}] 📱 Customer number: {session.customer_number}")
+                print(f"[{_ist_str()}] [{session.ucid}] 📱 Customer (DID): {session.customer_number}")
+            if session.vmn:
+                print(f"[{_ist_str()}] [{session.ucid}] 📞 VMN (Kia number): {session.vmn}")
             if session.store_code:
                 print(f"[{session.ucid}] 🏪 Store code: {session.store_code}")
 
@@ -1221,6 +1237,7 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
             "customer_name": customer_name,
             "store_code": session.store_code or "",
             "customer_number": session.customer_number or "",
+            "vmn": session.vmn or "",  # Virtual Mobile Number (Kia number dialed)
             "start_time": (transcript_start or session.start_time or end_time).strftime(
                 "%Y-%m-%d %H:%M:%S"
             ),
