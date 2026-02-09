@@ -86,6 +86,9 @@ class TelephonySession:
     transfer_question_asked_at: Optional[float] = None
     transfer_question_answered: bool = False
     last_transfer_answer_text: Optional[str] = None
+    # Accumulates agent text within a single turn (reset at turnComplete)
+    # Needed because Gemini sends transcription in small chunks
+    current_turn_agent_text: str = ""
     # Call control event tracking (for Admin UI)
     call_control_event: Optional[Dict[str, Any]] = None
     waybeo_payload: Optional[Dict[str, Any]] = None
@@ -212,6 +215,8 @@ def _is_transfer_question(text: Optional[str]) -> bool:
         or "sales team se baat karna chahenge" in normalized
         or "sales team se baat karna chahenge?" in normalized
     )
+
+
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -342,9 +347,12 @@ async def send_hangup_event(session: TelephonySession, cfg: "Config", reason: st
             except Exception:
                 pass
         
-        # Close the WebSocket connection to ensure call ends
-        # This is the definitive way to end the call - closing the WS
-        # signals to Waybeo that the bot is done
+        # Give Waybeo time to process the hangup command before closing WS.
+        # If we close WS immediately, Waybeo may not have finished
+        # disconnecting the phone line, and the caller stays connected.
+        await asyncio.sleep(1.0)
+        
+        # Close the WebSocket connection as final cleanup
         try:
             if session.client_ws.open:
                 await session.client_ws.close(code=1000, reason=reason)
@@ -745,14 +753,19 @@ async def _gemini_reader(
                     print(f"[{session.ucid}] ⏳ Waiting for goodbye message before transfer...")
                     
                 elif func_name == "end_call":
-                    allow_end = (
-                        session.transfer_question_asked_at
-                        and session.transfer_question_answered
-                        and _is_negative(session.last_transfer_answer_text)
-                    )
+                    # Trust Gemini's end_call decision if the transfer question
+                    # was asked and the user responded. Gemini heard the actual
+                    # audio and may understand "no" even when transcription is
+                    # garbled (e.g. "nahi" → "आईं"). Only reject if:
+                    #   - Call is too short (already handled above)
+                    #   - Transfer question was never asked AND call < 60s
+                    allow_end = True
+                    if not session.transfer_question_asked_at and call_duration < 60:
+                        allow_end = False
+                    
                     if not allow_end:
                         await _reject_call(
-                            "End call requires explicit user NO to the Sales Team question."
+                            "End call too early - transfer question not yet asked."
                         )
                         continue
 
@@ -775,9 +788,50 @@ async def _gemini_reader(
             # This ensures Gemini finishes saying goodbye before we hangup
             # ─────────────────────────────────────────────────────────────────
             server_content = msg.get("serverContent", {})
-            if server_content.get("turnComplete") and session.call_ending and not session.hangup_sent:
-                print(f"[{session.ucid}] ✅ Goodbye message complete - triggering call end")
-                asyncio.create_task(_handle_call_end(session, cfg))
+            if server_content.get("turnComplete") and not session.hangup_sent:
+                # ── Check accumulated agent text for transfer question ──
+                # Gemini sends transcription in small chunks (e.g. "Sales",
+                # "Team", "se baat", "chahenge?"). Individual chunks never
+                # contain the full phrase, so we accumulate per-turn and
+                # check the full sentence at turnComplete.
+                if session.current_turn_agent_text.strip():
+                    full_turn_text = session.current_turn_agent_text.strip()
+                    if _is_transfer_question(full_turn_text):
+                        print(
+                            f"[{session.ucid}] 📋 Transfer question detected in turn: "
+                            f"'{full_turn_text[:60]}...'"
+                        )
+                        session.transfer_question_asked_at = time.time()
+                        session.transfer_question_answered = False
+                        session.last_transfer_answer_text = None
+                # Reset accumulated text for next turn
+                session.current_turn_agent_text = ""
+
+                if session.call_ending:
+                    # Normal path: Gemini called end_call/transfer_call, goodbye done
+                    print(f"[{session.ucid}] ✅ Goodbye message complete - triggering call end")
+                    # Set hangup_sent IMMEDIATELY to prevent duplicate tasks
+                    # (audio drain wait inside _handle_call_end is async)
+                    session.hangup_sent = True
+                    asyncio.create_task(_handle_call_end(session, cfg))
+                elif (
+                    session.transfer_question_asked_at
+                    and session.transfer_question_answered
+                ):
+                    # Safety net: Transfer question was asked AND user responded,
+                    # but Gemini said goodbye without calling end_call().
+                    # This is state-based (not text matching) — the transfer
+                    # question is always the final step, so if user answered and
+                    # agent finished speaking, the call is done.
+                    print(
+                        f"[{session.ucid}] 🔄 Auto-hangup: transfer question answered "
+                        f"but Gemini didn't call end_call() — triggering hangup"
+                    )
+                    session.user_wants_transfer = False
+                    session.call_ending = True
+                    # Set hangup_sent IMMEDIATELY to prevent duplicate tasks
+                    session.hangup_sent = True
+                    asyncio.create_task(_handle_call_end(session, cfg))
 
             # Capture transcription if present
             transcription = _extract_transcription(msg, debug=cfg.DEBUG)
@@ -794,10 +848,10 @@ async def _gemini_reader(
                         session.last_transfer_answer_text = text
                 elif speaker == "agent":
                     session.last_agent_text = text
-                    if _is_transfer_question(text):
-                        session.transfer_question_asked_at = time.time()
-                        session.transfer_question_answered = False
-                        session.last_transfer_answer_text = None
+                    # Accumulate agent text within the current turn.
+                    # Transfer question detection happens at turnComplete
+                    # using the full accumulated text (not individual chunks).
+                    session.current_turn_agent_text += " " + text
                 
                 # Always log transcripts (these are valuable)
                 if cfg.LOG_TRANSCRIPTS:
@@ -841,10 +895,10 @@ async def _handle_call_end(session: TelephonySession, cfg: Config) -> None:
     then sends the appropriate event:
     - Transfer if user said YES to talking to sales team
     - Hangup if user said NO or didn't respond
-    """
-    if session.hangup_sent:
-        return  # Already handled
     
+    NOTE: session.hangup_sent is set BEFORE this task is created (at the call
+    site) to prevent duplicate tasks from race conditions with turnComplete events.
+    """
     try:
         # Wait for output buffer to drain so goodbye audio plays
         # Check every 100ms, timeout after 5 seconds
@@ -853,10 +907,9 @@ async def _handle_call_end(session: TelephonySession, cfg: Config) -> None:
             await asyncio.sleep(0.1)
             wait_time += 0.1
         
-        # Extra 500ms to ensure audio is fully delivered
+        # Extra 500ms to ensure audio is fully delivered to caller's phone
         await asyncio.sleep(0.5)
         
-        session.hangup_sent = True
         event_timestamp = _now_ist().isoformat()
         
         if session.user_wants_transfer:
@@ -945,8 +998,6 @@ async def handle_client(client_ws, path: str):
         vad_silence_ms=300,   # Less aggressive to reduce dropped turns
         vad_prefix_ms=200,    # Slightly higher prefix for stability
         activity_handling="START_OF_ACTIVITY_INTERRUPTS",
-        start_of_speech_sensitivity="START_SENSITIVITY_MEDIUM",
-        end_of_speech_sensitivity="END_SENSITIVITY_MEDIUM",
     )
 
     # ─────────────────────────────────────────────────────────────────
@@ -1062,8 +1113,16 @@ async def handle_client(client_ws, path: str):
             or waybeo_headers.get("x-waybeo-store-code", "")
             or waybeo_headers.get("X-Waybeo-Store-Code", "")
             or waybeo_headers.get("store_code", "")
-            or None
+            or "1001"  # Default store code when VMN not in mapping
         )
+
+        # Update waybeo_headers to include start event data for Admin UI display
+        # The start event body contains the actual call data (ucid, did, vmn)
+        # while WS headers only have transport info (Upgrade, Connection, etc.)
+        session.waybeo_headers = {
+            "start_event": start_msg,  # Actual call data from Waybeo
+            "ws_headers": waybeo_headers if waybeo_headers else {},  # WebSocket HTTP headers
+        }
 
         if cfg.LOG_TRANSCRIPTS:
             print(f"[{_ist_str()}] [{session.ucid}] 🎬 start event received on path={path}")

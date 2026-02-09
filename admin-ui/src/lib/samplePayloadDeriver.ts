@@ -166,6 +166,7 @@ const KEY_PLACEHOLDER_MAP: Record<string, string> = {
   // Call identifiers
   call_ref_id: "{call_id}",
   callRefId: "{call_id}",
+  callId: "{call_id}",
   ucid: "{call_id}",
   call_id: "{call_id}",
 
@@ -202,6 +203,7 @@ const KEY_PLACEHOLDER_MAP: Record<string, string> = {
 
   // Transcript
   transcript_text: "{transcript_text}",
+  transcript: "{transcript_text}",
 
   // Language / transfer (often nested, but handle at top level too)
   detected_language: "{detected_language}",
@@ -245,6 +247,7 @@ const KEEP_LITERAL_KEYS = new Set([
   "recording_url",
   "recordingUrl",
   "action",
+  "command",  // Waybeo API command (e.g. "data_record")
 ]);
 
 // ---------------------------------------------------------------------------
@@ -312,6 +315,92 @@ function deriveResponseDataItem(
     }
   }
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Waybeo parameters array handler
+// ---------------------------------------------------------------------------
+
+/**
+ * Mapping from Waybeo parameter "key" names to placeholder values.
+ * Used for the [{key: "field_name", value: "sample_value"}, ...] format.
+ */
+const WAYBEO_PARAM_KEY_MAP: Record<string, string> = {
+  // Call identifiers
+  bot_reference_id: "bot_{call_id}",
+  reference_id: "bot_{call_id}",
+  call_id: "{call_id}",
+  callId: "{call_id}",
+  ucid: "{call_id}",
+
+  // Status
+  data_capture_status: "{completion_status}",
+  completion_status: "{completion_status}",
+  call_status: "{completion_status}",
+
+  // Customer / Agent
+  customer_name: "{extracted.name}",
+  full_name: "{extracted.name}",
+  name: "{extracted.name}",
+  customer_number: "{customer_number}",
+  caller_number: "{customer_number}",
+  phone: "{customer_number}",
+  store_code: "{store_code}",
+  agent_id: "{agent_slug}",
+  agent_slug: "{agent_slug}",
+
+  // Timings
+  call_start_time: "{start_time}",
+  start_time: "{start_time}",
+  call_end_time: "{end_time}",
+  end_time: "{end_time}",
+  call_duration: "{duration_sec}",
+  duration: "{duration_sec}",
+
+  // Extracted data
+  car_model: "{extracted.model}",
+  model: "{extracted.model}",
+  email: "{extracted.email}",
+  email_id: "{extracted.email}",
+  test_drive: "{extracted.test_drive}",
+  test_drive_interest: "{extracted.test_drive}",
+
+  // Transcript
+  transcript: "{transcript_text}",
+  transcript_text: "{transcript_text}",
+
+  // Language / transfer
+  detected_language: "{detected_language}",
+  transfer_status: "{transfer_status}",
+  transfer_reason: "{transfer_reason}",
+};
+
+/**
+ * Handle Waybeo-style parameters array:
+ * [{ key: "bot_reference_id", value: "bot_test_123" }, ...]
+ *
+ * For each item, replace the "value" field with a placeholder based on the "key" field.
+ */
+function deriveWaybeoParametersArray(
+  items: unknown[],
+): unknown[] {
+  return items.map((item) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return item;
+    const obj = item as Record<string, unknown>;
+
+    // Check if this looks like a {key: "...", value: "..."} pair
+    if (typeof obj.key === "string" && "value" in obj) {
+      const paramKey = obj.key as string;
+      const placeholder = WAYBEO_PARAM_KEY_MAP[paramKey];
+      if (placeholder) {
+        return { ...obj, value: placeholder };
+      }
+      // Unknown parameter key - keep as literal but log as unmapped
+      return obj;
+    }
+
+    return obj;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -384,6 +473,14 @@ function deriveValue(
       }
       return item;
     });
+  }
+
+  // 4b. Handle Waybeo parameters array: [{key: "field_name", value: "sample"}, ...]
+  if (key === "parameters" && Array.isArray(value)) {
+    const first = value[0];
+    if (typeof first === "object" && first !== null && "key" in first && "value" in first) {
+      return deriveWaybeoParametersArray(value);
+    }
   }
 
   // 5. Handle sales_data / extracted data objects
@@ -510,7 +607,7 @@ export function deriveTemplateFromSample(sampleJson: string): DerivationResult {
           fullPath,
         );
       } else if (
-        key === "response_data" &&
+        (key === "response_data" || key === "parameters") &&
         Array.isArray(origValue) &&
         Array.isArray(derivedValue)
       ) {

@@ -67,28 +67,23 @@ const DEFAULT_SI_TEMPLATE = {
   ]
 };
 
-// Default Waybeo payload template
+// Default Waybeo payload template (matches Waybeo bot-call API format)
 const DEFAULT_WAYBEO_TEMPLATE = {
-  ucid: "{call_id}",
-  call_status: "{completion_status}",
-  call_start_time: "{start_time}",
-  call_end_time: "{end_time}",
-  call_duration: "{duration_sec}",
-  caller_number: "{customer_number}",
-  agent_id: "{agent_slug}",
-  store_code: "{store_code}",
-  transcript: "{transcript_text}",
-  sales_data: {
-    full_name: "{extracted.name}",
-    car_model: "{extracted.model}",
-    test_drive_interest: "{extracted.test_drive}",
-    email_id: "{extracted.email}"
-  },
-  analytics: {
-    total_exchanges: "{analytics.total_exchanges}",
-    user_messages: "{analytics.user_messages}",
-    assistant_messages: "{analytics.assistant_messages}"
-  }
+  callId: "{call_id}",
+  command: "data_record",
+  parameters: [
+    { key: "bot_reference_id", value: "bot_{call_id}" },
+    { key: "data_capture_status", value: "{completion_status}" },
+    { key: "customer_name", value: "{extracted.name}" },
+    { key: "customer_number", value: "{customer_number}" },
+    { key: "store_code", value: "{store_code}" },
+    { key: "car_model", value: "{extracted.model}" },
+    { key: "test_drive_interest", value: "{extracted.test_drive}" },
+    { key: "email_id", value: "{extracted.email}" },
+    { key: "call_duration", value: "{duration_sec}" },
+    { key: "call_start_time", value: "{start_time}" },
+    { key: "call_end_time", value: "{end_time}" },
+  ]
 };
 
 interface VoiceAgent {
@@ -240,16 +235,24 @@ export default function ConfigurationPage() {
       return;
     }
     
-    // Parse sample payloads for saving (only include when user has content)
-    // IMPORTANT: Don't send null for sample payloads — it would overwrite existing DB values.
-    // Only include in PATCH body when textarea has content, otherwise omit to preserve DB value.
+    // Parse sample payloads for saving
+    // Include when user has content OR when DB already has a value (to preserve it)
     let siSample: object | undefined = undefined;
     let waybeoSample: object | undefined = undefined;
+    
     if (siSamplePayload.trim()) {
-      try { siSample = JSON.parse(siSamplePayload); } catch { /* skip - don't overwrite */ }
+      try { 
+        siSample = JSON.parse(siSamplePayload); 
+      } catch (e) { 
+        console.warn("[Save] SI sample payload is not valid JSON:", e);
+      }
     }
     if (waybeoSamplePayload.trim()) {
-      try { waybeoSample = JSON.parse(waybeoSamplePayload); } catch { /* skip - don't overwrite */ }
+      try { 
+        waybeoSample = JSON.parse(waybeoSamplePayload); 
+      } catch (e) { 
+        console.warn("[Save] Waybeo sample payload is not valid JSON:", e);
+      }
     }
 
     const patchBody: Record<string, unknown> = {
@@ -263,10 +266,15 @@ export default function ConfigurationPage() {
       waybeoEndpointUrl: waybeoEndpointUrl || null,
       waybeoAuthHeader: waybeoAuthHeader || null,
     };
-    // Only include sample payloads when they have content (undefined fields are omitted by JSON.stringify)
+    // Include sample payloads when they have content
     if (siSample !== undefined) patchBody.siSamplePayload = siSample;
     if (waybeoSample !== undefined) patchBody.waybeoSamplePayload = waybeoSample;
 
+    // DEBUG: Log SI sample textarea state and what we're sending
+    console.log("[Save] SI sample textarea length:", siSamplePayload.length, "| trimmed:", siSamplePayload.trim().length);
+    console.log("[Save] Waybeo sample textarea length:", waybeoSamplePayload.length, "| trimmed:", waybeoSamplePayload.trim().length);
+    console.log("[Save] patchBody has siSamplePayload:", "siSamplePayload" in patchBody, "waybeoSamplePayload:", "waybeoSamplePayload" in patchBody);
+    
     const res = await fetch(`/api/voiceagents/${params.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -275,6 +283,11 @@ export default function ConfigurationPage() {
     if (res.ok) {
       const result = await res.json();
       const updated = result?.voiceAgent ?? result;
+      
+      // DEBUG: Log what we got back
+      console.log("[Save] Response siSamplePayload:", updated.siSamplePayload ? "EXISTS" : "NULL");
+      console.log("[Save] Response waybeoSamplePayload:", updated.waybeoSamplePayload ? "EXISTS" : "NULL");
+      
       setAgent(updated);
 
       const siValidation = result?.templateValidation?.si;
@@ -296,6 +309,11 @@ export default function ConfigurationPage() {
 
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
+    } else {
+      // Show error to user if save fails
+      const errorBody = await res.json().catch(() => ({}));
+      console.error("[Save] PATCH failed:", res.status, errorBody);
+      alert(`Save failed (${res.status}): ${errorBody?.error || "Unknown error"}`);
     }
     setSaving(false);
   };
@@ -847,6 +865,18 @@ export default function ConfigurationPage() {
               placeholder='Paste a sample SI payload JSON here, e.g.:\n{"id":"bot_abc123","customer_name":"Kia","call_ref_id":"abc123","duration":79,...}'
               className="font-mono text-xs leading-relaxed"
             />
+            {/* Status indicator for SI sample */}
+            <div className="flex items-center justify-between text-xs">
+              <span className={siSamplePayload.trim() ? "text-emerald-600" : "text-slate-400"}>
+                {siSamplePayload.trim() 
+                  ? `✅ ${siSamplePayload.trim().length} chars — will be saved with "Save All Changes"`
+                  : "⬜ Empty — paste a sample payload above"}
+              </span>
+              {siSamplePayload.trim() && (() => {
+                try { JSON.parse(siSamplePayload); return <span className="text-emerald-600">Valid JSON ✓</span>; }
+                catch { return <span className="text-red-500">⚠️ Invalid JSON — will NOT be saved</span>; }
+              })()}
+            </div>
             {deriveError && activeTab === "si" && (
               <div className="bg-red-50 border border-red-200 rounded px-3 py-2 text-xs text-red-700">
                 {deriveError}
@@ -1045,6 +1075,18 @@ export default function ConfigurationPage() {
               placeholder='Paste a sample Waybeo payload JSON here, e.g.:\n{"call_id":"abc123","agent_name":"Spotlight","duration":79,...}'
               className="font-mono text-xs leading-relaxed"
             />
+            {/* Status indicator for Waybeo sample */}
+            <div className="flex items-center justify-between text-xs">
+              <span className={waybeoSamplePayload.trim() ? "text-teal-600" : "text-slate-400"}>
+                {waybeoSamplePayload.trim()
+                  ? `✅ ${waybeoSamplePayload.trim().length} chars — will be saved with "Save All Changes"`
+                  : "⬜ Empty — paste a sample payload above"}
+              </span>
+              {waybeoSamplePayload.trim() && (() => {
+                try { JSON.parse(waybeoSamplePayload); return <span className="text-teal-600">Valid JSON ✓</span>; }
+                catch { return <span className="text-red-500">⚠️ Invalid JSON — will NOT be saved</span>; }
+              })()}
+            </div>
             {deriveError && activeTab === "waybeo" && (
               <div className="bg-red-50 border border-red-200 rounded px-3 py-2 text-xs text-red-700">
                 {deriveError}

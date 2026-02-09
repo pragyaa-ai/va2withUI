@@ -35,6 +35,12 @@ interface CallControlEvent {
   status?: string;
 }
 
+interface WebhookResponse {
+  success: boolean;
+  status_code: number;
+  response_body: string;
+}
+
 interface CallDetail {
   id: string;
   callId?: string;
@@ -55,9 +61,12 @@ interface CallDetail {
   payloadJson?: Record<string, unknown>;
   waybeoPayloadJson?: Record<string, unknown>;
   callControlEvent?: CallControlEvent;
+  siWebhookResponse?: WebhookResponse;
+  waybeoWebhookResponse?: WebhookResponse;
+  waybeoHeaders?: Record<string, unknown>;
 }
 
-type TabType = "summary" | "extracted" | "siPayload" | "waybeoPayload";
+type TabType = "summary" | "extracted" | "waybeoHeaders" | "siPayload" | "waybeoPayload";
 
 export default function CallDetailPage() {
   const params = useParams();
@@ -190,6 +199,7 @@ export default function CallDetailPage() {
   const tabs: { id: TabType; label: string }[] = [
     { id: "summary", label: "Summary & Sentiment" },
     { id: "extracted", label: "Extracted Data" },
+    { id: "waybeoHeaders", label: "Waybeo Call Data" },
     { id: "siPayload", label: "SI Payload" },
     { id: "waybeoPayload", label: "Waybeo Payload" },
   ];
@@ -393,10 +403,151 @@ export default function CallDetailPage() {
           </Card>
         )}
 
+        {/* Waybeo Call Data Tab */}
+        {activeTab === "waybeoHeaders" && (
+          <Card className="p-6">
+            {call.waybeoHeaders && Object.keys(call.waybeoHeaders).length > 0 ? (
+              (() => {
+                const raw = call.waybeoHeaders!;
+                // New format: { start_event: {...}, ws_headers: {...} }
+                const startEvent = (raw as Record<string, unknown>).start_event as Record<string, unknown> | undefined;
+                const wsHeaders = (raw as Record<string, unknown>).ws_headers as Record<string, string> | undefined;
+                // Legacy format: flat headers object (no start_event key)
+                const isNewFormat = !!startEvent;
+
+                // Extract key fields from start event (new format) or headers (legacy)
+                const callId = isNewFormat
+                  ? (startEvent?.ucid as string) || ""
+                  : "";
+                const customerNumber = isNewFormat
+                  ? (startEvent?.did as string) || ""
+                  : "";
+                const vmn = isNewFormat
+                  ? (startEvent?.vmn as string) || ""
+                  : "";
+
+                return (
+                  <div className="space-y-6">
+                    {/* Section 1: Start Event Data */}
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-900 mb-2">Waybeo Start Event</h3>
+                      <p className="text-xs text-slate-500 mb-4">
+                        Data received from Waybeo in the WebSocket start event when the call was initiated. Contains call ID (UCID), customer number (DID), and VMN used for store code lookup.
+                      </p>
+
+                      {/* Key fields highlighted */}
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <div className="p-3 rounded-lg bg-indigo-50 border border-indigo-200">
+                          <p className="text-xs font-medium text-indigo-500 uppercase mb-1">Call ID (UCID)</p>
+                          <p className="text-sm font-mono font-semibold text-indigo-900">
+                            {callId || (
+                              <span className="text-slate-400 font-normal">Not available</span>
+                            )}
+                          </p>
+                        </div>
+
+                        <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200">
+                          <p className="text-xs font-medium text-emerald-500 uppercase mb-1">Customer Number (DID)</p>
+                          <p className="text-sm font-mono font-semibold text-emerald-900">
+                            {customerNumber || (
+                              <span className="text-slate-400 font-normal">Not available</span>
+                            )}
+                          </p>
+                        </div>
+
+                        <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
+                          <p className="text-xs font-medium text-amber-500 uppercase mb-1">VMN (Kia Number)</p>
+                          <p className="text-sm font-mono font-semibold text-amber-900">
+                            {vmn || (
+                              <span className="text-slate-400 font-normal">Not available</span>
+                            )}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Section 2: Raw Start Event JSON */}
+                    {isNewFormat && startEvent && (
+                      <div className="pt-4 border-t border-slate-200">
+                        <h4 className="text-sm font-semibold text-slate-900 mb-3">Raw Start Event</h4>
+                        <div className="bg-slate-900 rounded-lg p-4 overflow-x-auto">
+                          <pre className="text-sm text-slate-100 font-mono whitespace-pre-wrap">
+                            {JSON.stringify(startEvent, null, 2)}
+                          </pre>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Section 3: WebSocket Headers (collapsible) */}
+                    {wsHeaders && Object.keys(wsHeaders).length > 0 && (
+                      <details className="pt-4 border-t border-slate-200">
+                        <summary className="text-sm font-semibold text-slate-900 mb-3 cursor-pointer hover:text-slate-700">
+                          WebSocket HTTP Headers <span className="text-xs font-normal text-slate-400">({Object.keys(wsHeaders).length} headers)</span>
+                        </summary>
+                        <div className="mt-3 bg-slate-50 rounded-lg border border-slate-200 overflow-hidden">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-slate-100 border-b border-slate-200">
+                                <th className="text-left px-4 py-2 font-medium text-slate-600 w-1/3">Header</th>
+                                <th className="text-left px-4 py-2 font-medium text-slate-600">Value</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {Object.entries(wsHeaders).map(([key, value], idx) => (
+                                <tr key={key} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50"}>
+                                  <td className="px-4 py-2 font-mono text-xs text-slate-700 font-medium">{key}</td>
+                                  <td className="px-4 py-2 font-mono text-xs text-slate-600 break-all">{String(value)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </details>
+                    )}
+
+                    {/* Legacy format: show flat headers as a table (old calls before this update) */}
+                    {!isNewFormat && (
+                      <div className="pt-4 border-t border-slate-200">
+                        <h4 className="text-sm font-semibold text-slate-900 mb-3">All Headers (Legacy)</h4>
+                        <p className="text-xs text-slate-400 mb-3">
+                          This call was recorded before the start event capture update. Only WebSocket HTTP headers are available.
+                        </p>
+                        <div className="bg-slate-50 rounded-lg border border-slate-200 overflow-hidden">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-slate-100 border-b border-slate-200">
+                                <th className="text-left px-4 py-2 font-medium text-slate-600 w-1/3">Header</th>
+                                <th className="text-left px-4 py-2 font-medium text-slate-600">Value</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {Object.entries(raw).map(([key, value], idx) => (
+                                <tr key={key} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50"}>
+                                  <td className="px-4 py-2 font-mono text-xs text-slate-700 font-medium">{key}</td>
+                                  <td className="px-4 py-2 font-mono text-xs text-slate-600 break-all">{String(value)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()
+            ) : (
+              <div className="text-center py-8">
+                <p className="text-slate-400 mb-2">No Waybeo call data recorded for this call.</p>
+                <p className="text-xs text-slate-400">Start event data is captured when Waybeo initiates the WebSocket connection.</p>
+              </div>
+            )}
+          </Card>
+        )}
+
         {/* SI Payload Tab */}
         {activeTab === "siPayload" && (
           <Card className="p-6">
-            <h3 className="text-sm font-semibold text-slate-900 mb-4">SI Payload</h3>
+            <h3 className="text-sm font-semibold text-slate-900 mb-4">SI Payload (Sent to Webhook)</h3>
             {call.payloadJson ? (
               <div className="bg-slate-900 rounded-lg p-4 overflow-x-auto">
                 <pre className="text-sm text-slate-100 font-mono whitespace-pre-wrap">
@@ -409,8 +560,48 @@ export default function CallDetailPage() {
               </p>
             )}
 
+            {/* SI Webhook API Response */}
+            <div className="mt-6 pt-6 border-t border-slate-200">
+              <h4 className="text-sm font-semibold text-slate-900 mb-3">SI Webhook API Response</h4>
+              {call.siWebhookResponse ? (
+                <div className={`rounded-lg border ${
+                  call.siWebhookResponse.success
+                    ? "bg-emerald-50 border-emerald-200"
+                    : "bg-red-50 border-red-200"
+                }`}>
+                  <div className="flex items-center gap-3 p-3 border-b border-inherit">
+                    <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium ${
+                      call.siWebhookResponse.success
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-red-100 text-red-700"
+                    }`}>
+                      {call.siWebhookResponse.success ? "✅ Success" : "❌ Failed"}
+                    </span>
+                    <span className="text-sm font-mono text-slate-600">
+                      HTTP {call.siWebhookResponse.status_code}
+                    </span>
+                  </div>
+                  <div className="p-3">
+                    <pre className="text-xs text-slate-700 font-mono whitespace-pre-wrap break-all">
+                      {(() => {
+                        try {
+                          return JSON.stringify(JSON.parse(call.siWebhookResponse.response_body), null, 2);
+                        } catch {
+                          return call.siWebhookResponse.response_body;
+                        }
+                      })()}
+                    </pre>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 rounded-lg bg-slate-50 border border-slate-200 text-center">
+                  <p className="text-slate-400 text-sm">No SI webhook response recorded.</p>
+                </div>
+              )}
+            </div>
+
             {call.analyticsJson && (
-              <div className="mt-6">
+              <div className="mt-6 pt-6 border-t border-slate-200">
                 <h4 className="text-sm font-semibold text-slate-900 mb-3">Call Analytics</h4>
                 <div className="bg-slate-900 rounded-lg p-4 overflow-x-auto">
                   <pre className="text-sm text-slate-100 font-mono whitespace-pre-wrap">
@@ -425,7 +616,7 @@ export default function CallDetailPage() {
         {/* Waybeo Payload Tab */}
         {activeTab === "waybeoPayload" && (
           <Card className="p-6">
-            <h3 className="text-sm font-semibold text-slate-900 mb-4">Waybeo Payload</h3>
+            <h3 className="text-sm font-semibold text-slate-900 mb-4">Waybeo Payload (Sent to Webhook)</h3>
             {call.waybeoPayloadJson ? (
               <div className="bg-slate-900 rounded-lg p-4 overflow-x-auto">
                 <pre className="text-sm text-slate-100 font-mono whitespace-pre-wrap">
@@ -437,6 +628,46 @@ export default function CallDetailPage() {
                 No Waybeo payload available for this call.
               </p>
             )}
+
+            {/* Waybeo Webhook API Response */}
+            <div className="mt-6 pt-6 border-t border-slate-200">
+              <h4 className="text-sm font-semibold text-slate-900 mb-3">Waybeo Webhook API Response</h4>
+              {call.waybeoWebhookResponse ? (
+                <div className={`rounded-lg border ${
+                  call.waybeoWebhookResponse.success
+                    ? "bg-emerald-50 border-emerald-200"
+                    : "bg-red-50 border-red-200"
+                }`}>
+                  <div className="flex items-center gap-3 p-3 border-b border-inherit">
+                    <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium ${
+                      call.waybeoWebhookResponse.success
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-red-100 text-red-700"
+                    }`}>
+                      {call.waybeoWebhookResponse.success ? "✅ Success" : "❌ Failed"}
+                    </span>
+                    <span className="text-sm font-mono text-slate-600">
+                      HTTP {call.waybeoWebhookResponse.status_code}
+                    </span>
+                  </div>
+                  <div className="p-3">
+                    <pre className="text-xs text-slate-700 font-mono whitespace-pre-wrap break-all">
+                      {(() => {
+                        try {
+                          return JSON.stringify(JSON.parse(call.waybeoWebhookResponse.response_body), null, 2);
+                        } catch {
+                          return call.waybeoWebhookResponse.response_body;
+                        }
+                      })()}
+                    </pre>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 rounded-lg bg-slate-50 border border-slate-200 text-center">
+                  <p className="text-slate-400 text-sm">No Waybeo webhook response recorded.</p>
+                </div>
+              )}
+            </div>
 
             {/* Call Control Event (Hangup/Transfer) */}
             <div className="mt-6 pt-6 border-t border-slate-200">

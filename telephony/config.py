@@ -121,7 +121,5 @@ class Config:
 AGENT_DIRS = {
     "spotlight": "kia2",
 }
-
-
 def get_agent_dir(agent: str) -> str:
     return AGENT_DIRS.get(agent.lower(), agent.lower())

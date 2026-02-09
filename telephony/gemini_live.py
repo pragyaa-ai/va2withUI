@@ -35,8 +35,6 @@ class GeminiSessionConfig:
     vad_silence_ms: int = 300
     vad_prefix_ms: int = 400
     activity_handling: str = "START_OF_ACTIVITY_INTERRUPTS"
-    start_of_speech_sensitivity: str = "START_SENSITIVITY_HIGH"
-    end_of_speech_sensitivity: str = "END_SENSITIVITY_HIGH"
     
     # Enable function calling for call control
     enable_call_control: bool = True
@@ -170,8 +168,6 @@ class GeminiLiveSession:
                         "disabled": False,
                         "silence_duration_ms": self.cfg.vad_silence_ms,
                         "prefix_padding_ms": self.cfg.vad_prefix_ms,
-                        "start_of_speech_sensitivity": self.cfg.start_of_speech_sensitivity,
-                        "end_of_speech_sensitivity": self.cfg.end_of_speech_sensitivity,
                     },
                     "activity_handling": self.cfg.activity_handling,
                 },

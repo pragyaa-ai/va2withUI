@@ -205,7 +205,7 @@ class AdminClient:
         auth_header: Optional[str],
         call_id: str,
         webhook_name: str = "webhook",
-    ) -> bool:
+    ) -> Dict[str, Any]:
         """
         Push payload to an external webhook endpoint.
         
@@ -217,15 +217,15 @@ class AdminClient:
             webhook_name: Name for logging (e.g., "SI", "Waybeo")
             
         Returns:
-            True if successful, False otherwise
+            Dict with {success, status_code, response_body} for storage
         """
         if not endpoint_url:
-            return False
+            return {"success": False, "status_code": 0, "response_body": "No endpoint configured"}
         
         import urllib.request
         import urllib.error
         
-        def do_request() -> bool:
+        def do_request() -> Dict[str, Any]:
             try:
                 data = json.dumps(payload).encode("utf-8")
                 req = urllib.request.Request(
@@ -245,27 +245,30 @@ class AdminClient:
                     req.add_header("Authorization", normalized_auth)
                 
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    response_body = resp.read().decode("utf-8")
                     if resp.status in (200, 201, 202):
                         print(f"[{call_id}] ✅ {webhook_name} webhook delivered: {resp.status}")
-                        return True
+                        return {"success": True, "status_code": resp.status, "response_body": response_body}
                     else:
                         print(f"[{call_id}] ⚠️ {webhook_name} webhook returned: {resp.status}")
-                        return False
+                        return {"success": False, "status_code": resp.status, "response_body": response_body}
                         
             except urllib.error.HTTPError as e:
-                print(f"[{call_id}] ❌ {webhook_name} webhook HTTP error: {e.code} {e.reason}")
+                error_body = ""
                 try:
-                    error_body = e.read().decode("utf-8")[:200]
-                    print(f"[{call_id}]    Response: {error_body}")
+                    error_body = e.read().decode("utf-8")[:500]
                 except:
                     pass
-                return False
+                print(f"[{call_id}] ❌ {webhook_name} webhook HTTP error: {e.code} {e.reason}")
+                if error_body:
+                    print(f"[{call_id}]    Response: {error_body[:200]}")
+                return {"success": False, "status_code": e.code, "response_body": error_body or f"{e.code} {e.reason}"}
             except urllib.error.URLError as e:
                 print(f"[{call_id}] ❌ {webhook_name} webhook connection error: {e.reason}")
-                return False
+                return {"success": False, "status_code": 0, "response_body": f"Connection error: {e.reason}"}
             except Exception as e:
                 print(f"[{call_id}] ❌ {webhook_name} webhook error: {e}")
-                return False
+                return {"success": False, "status_code": 0, "response_body": f"Error: {e}"}
         
         # Run sync request in thread pool to not block event loop
         loop = asyncio.get_event_loop()
@@ -277,7 +280,7 @@ class AdminClient:
         endpoint_url: str,
         auth_header: Optional[str],
         call_id: str,
-    ) -> bool:
+    ) -> Dict[str, Any]:
         """
         Push SI payload to configured Single Interface endpoint.
         
@@ -288,7 +291,7 @@ class AdminClient:
             call_id: Call ID for logging
             
         Returns:
-            True if successful, False otherwise
+            Dict with {success, status_code, response_body}
         """
         return await self.push_to_external_webhook(
             payload=payload,
@@ -304,7 +307,7 @@ class AdminClient:
         endpoint_url: str,
         auth_header: Optional[str],
         call_id: str,
-    ) -> bool:
+    ) -> Dict[str, Any]:
         """
         Push Waybeo payload to configured Waybeo endpoint.
         
@@ -315,7 +318,7 @@ class AdminClient:
             call_id: Call ID for logging
             
         Returns:
-            True if successful, False otherwise
+            Dict with {success, status_code, response_body}
         """
         return await self.push_to_external_webhook(
             payload=payload,

@@ -84,6 +84,23 @@ interface SIPayload {
   // Waybeo payload and call control event (new in v0.6)
   waybeo_payload?: Record<string, unknown>;
   call_control_event?: CallControlEvent;
+  // Webhook responses (new in v0.7)
+  si_webhook_response?: {
+    success: boolean;
+    status_code: number;
+    response_body: string;
+  };
+  waybeo_webhook_response?: {
+    success: boolean;
+    status_code: number;
+    response_body: string;
+  };
+  // Pre-generated summary and sentiment from telephony service (new in v0.8)
+  summary?: string;
+  sentiment?: "POSITIVE" | "NEUTRAL" | "NEGATIVE";
+  sentimentScore?: number;
+  // Waybeo headers received at call start (contains callid, caller number, store code)
+  waybeo_headers?: Record<string, string>;
 }
 
 // Helper to extract value from response_data array
@@ -238,8 +255,16 @@ export async function POST(request: NextRequest) {
     }
 
     // Parse dates
-    const startedAt = payload.start_time ? new Date(payload.start_time) : new Date();
-    const endedAt = payload.end_time ? new Date(payload.end_time) : null;
+    // Parse timestamps - telephony sends UTC times without TZ indicator (e.g. "2026-02-09 09:35:15")
+    // Append "Z" if no timezone info present so JS parses as UTC, not local time
+    const parseAsUTC = (dateStr: string): Date => {
+      // Already has timezone info (Z, +, -)
+      if (/[Z+-]\d{0,4}$/.test(dateStr.trim())) return new Date(dateStr);
+      // Naive datetime string → treat as UTC
+      return new Date(dateStr.trim().replace(" ", "T") + "Z");
+    };
+    const startedAt = payload.start_time ? parseAsUTC(payload.start_time) : new Date();
+    const endedAt = payload.end_time ? parseAsUTC(payload.end_time) : null;
 
     // Extract data from response_data for convenience
     const extractedData = {
@@ -249,16 +274,36 @@ export async function POST(request: NextRequest) {
       test_drive_interest: getResponseValue(payload.response_data, "test_drive"),
     };
 
-    // Auto-generate summary and sentiment if transcript is provided
-    let summary: string | null = null;
-    let sentiment: "POSITIVE" | "NEUTRAL" | "NEGATIVE" | null = null;
-    let sentimentScore: number | null = null;
+    // Build clean SI payload (strip out Admin UI internal fields like waybeo_payload, webhook responses)
+    // This is the exact payload that was sent to the SI webhook endpoint
+    const {
+      waybeo_payload: _wp,
+      call_control_event: _cce,
+      si_webhook_response: _swr,
+      waybeo_webhook_response: _wwr,
+      waybeo_headers: _wh,
+      transcript: _transcript,
+      summary: _pregenSummary,
+      sentiment: _pregenSentiment,
+      sentimentScore: _pregenSentimentScore,
+      ...cleanSIPayloadFields
+    } = payload;
+    const cleanSIPayload = cleanSIPayloadFields;
 
-    if (payload.transcript && payload.transcript.length > 0) {
+    // Use pre-generated summary/sentiment from telephony service if available,
+    // otherwise generate here using Gemini API (requires GOOGLE_API_KEY in admin-ui .env)
+    let summary: string | null = payload.summary || null;
+    let sentiment: "POSITIVE" | "NEUTRAL" | "NEGATIVE" | null = payload.sentiment || null;
+    let sentimentScore: number | null = payload.sentimentScore ?? null;
+
+    if (!summary && payload.transcript && payload.transcript.length > 0) {
+      console.log(`[Ingest] ${payload.call_ref_id}: No pre-generated summary, attempting local generation...`);
       const analysis = await generateSummaryAndSentiment(payload.transcript, payload.call_ref_id);
       summary = analysis.summary;
       sentiment = analysis.sentiment;
       sentimentScore = analysis.sentimentScore;
+    } else if (summary) {
+      console.log(`[Ingest] ${payload.call_ref_id}: Using pre-generated summary from telephony service`);
     }
 
     // Upsert the call session (update if exists, create if not)
@@ -275,13 +320,16 @@ export async function POST(request: NextRequest) {
         minutesBilled: payload.duration ? new Prisma.Decimal(Math.ceil(payload.duration / 60)) : null,
         outcome: mapCompletionStatus(payload.completion_status),
         extractedData: extractedData as Prisma.InputJsonValue,
-        payloadJson: payload as unknown as Prisma.InputJsonValue,
+        payloadJson: cleanSIPayload as unknown as Prisma.InputJsonValue,
         waybeoPayloadJson: payload.waybeo_payload as Prisma.InputJsonValue ?? undefined,
         callControlEvent: payload.call_control_event as unknown as Prisma.InputJsonValue ?? undefined,
         transcript: payload.transcript as unknown as Prisma.InputJsonValue ?? undefined,
         summary: summary ?? undefined,
         sentiment: sentiment ?? undefined,
-        sentimentScore: sentimentScore ?? undefined,
+        sentimentScore: sentimentScore !== null ? new Prisma.Decimal(sentimentScore) : undefined,
+        siWebhookResponse: payload.si_webhook_response as Prisma.InputJsonValue ?? undefined,
+        waybeoWebhookResponse: payload.waybeo_webhook_response as Prisma.InputJsonValue ?? undefined,
+        waybeoHeaders: payload.waybeo_headers as Prisma.InputJsonValue ?? undefined,
       },
       create: {
         callId: payload.call_ref_id,
@@ -294,13 +342,16 @@ export async function POST(request: NextRequest) {
         minutesBilled: payload.duration ? new Prisma.Decimal(Math.ceil(payload.duration / 60)) : null,
         outcome: mapCompletionStatus(payload.completion_status),
         extractedData: extractedData as Prisma.InputJsonValue,
-        payloadJson: payload as unknown as Prisma.InputJsonValue,
+        payloadJson: cleanSIPayload as unknown as Prisma.InputJsonValue,
         waybeoPayloadJson: payload.waybeo_payload as Prisma.InputJsonValue ?? undefined,
         callControlEvent: payload.call_control_event as unknown as Prisma.InputJsonValue ?? undefined,
         transcript: payload.transcript as unknown as Prisma.InputJsonValue ?? undefined,
         summary: summary ?? undefined,
         sentiment: sentiment ?? undefined,
-        sentimentScore: sentimentScore ?? undefined,
+        sentimentScore: sentimentScore !== null ? new Prisma.Decimal(sentimentScore) : undefined,
+        siWebhookResponse: payload.si_webhook_response as Prisma.InputJsonValue ?? undefined,
+        waybeoWebhookResponse: payload.waybeo_webhook_response as Prisma.InputJsonValue ?? undefined,
+        waybeoHeaders: payload.waybeo_headers as Prisma.InputJsonValue ?? undefined,
       },
     });
 
