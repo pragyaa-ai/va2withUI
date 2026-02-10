@@ -255,16 +255,20 @@ export async function POST(request: NextRequest) {
     }
 
     // Parse dates
-    // Parse timestamps - telephony sends UTC times without TZ indicator (e.g. "2026-02-09 09:35:15")
-    // Append "Z" if no timezone info present so JS parses as UTC, not local time
-    const parseAsUTC = (dateStr: string): Date => {
+    // Telephony service sends IST timestamps as naive strings (e.g. "2026-02-10 15:59:39")
+    // These need to be converted to UTC for database storage
+    const parseISTtoUTC = (dateStr: string): Date => {
       // Already has timezone info (Z, +, -)
       if (/[Z+-]\d{0,4}$/.test(dateStr.trim())) return new Date(dateStr);
-      // Naive datetime string → treat as UTC
-      return new Date(dateStr.trim().replace(" ", "T") + "Z");
+      
+      // Naive datetime string from telephony is in IST (UTC+5:30)
+      // Parse as if it were UTC first, then subtract 5:30 to get actual UTC
+      const naiveUTC = new Date(dateStr.trim().replace(" ", "T") + "Z");
+      const actualUTC = new Date(naiveUTC.getTime() - 5.5 * 60 * 60 * 1000); // Subtract 5:30 hours
+      return actualUTC;
     };
-    const startedAt = payload.start_time ? parseAsUTC(payload.start_time) : new Date();
-    const endedAt = payload.end_time ? parseAsUTC(payload.end_time) : null;
+    const startedAt = payload.start_time ? parseISTtoUTC(payload.start_time) : new Date();
+    const endedAt = payload.end_time ? parseISTtoUTC(payload.end_time) : null;
 
     // Extract data from response_data for convenience
     const extractedData = {

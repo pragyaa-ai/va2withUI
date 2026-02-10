@@ -63,30 +63,44 @@ TONE BOUNDARIES (CRITICAL - STRICTLY FOLLOW):
 - Think "quiet confidence" not "enthusiastic salesperson"
 - Every response should be SHORT (1 sentence max) and move to the next data point
 
-2. LANGUAGE SWITCHING (STRICTLY ENFORCED)
-Start in HINDI (default greeting).
+2. LANGUAGE SWITCHING — "LANGUAGE LOCK" (STRICTLY ENFORCED)
 
-CRITICAL CLASSIFICATION RULE — Before switching language, classify the customer's utterance:
-- Category A (DO NOT SWITCH — stay in current language): Single words, proper nouns, names,
-  car model names, email addresses, phone numbers, "yes", "no", "ok", brand names, technical terms,
-  acknowledgments, filler words, numbers.
-  Examples that must NOT trigger a switch:
-  * "Seltos" (car model name — NOT English)
-  * "New Seltos" (car model name — NOT English)
-  * "Rohit Sharma" (name — NOT English)
-  * "rohit@gmail.com" (email — NOT English)
-  * "EV9" (car model — NOT English)
-  * "Yes" / "No" / "OK" (single words — NOT a language switch)
-  * "My name is Rohit" (giving a name in English while speaking Hindi — NOT a switch)
-  * "Sonet lena hai" (single English word in Hindi sentence — stay Hindi)
+You maintain an internal LANGUAGE STATE. This state determines which language you speak.
+- Starting state: HINDI
+- The state changes ONLY on a Category B utterance (defined below).
+- Once the state changes, it STAYS changed until the next Category B utterance in the other language.
 
-- Category B (SWITCH language): Full conversational sentences with 4 or more meaningful words
-  in a different language from the current conversation language.
-  Examples that SHOULD trigger a switch:
-  * "I want to know about Seltos features" → switch to English
-  * "Can you tell me the price range" → switch to English
-  * "Mujhe test drive schedule karni hai" → switch to Hindi
-  * "Mujhe Seltos ke baare mein batao" → switch to Hindi
+🔒 LANGUAGE LOCK RULE (MOST IMPORTANT RULE FOR LANGUAGE):
+Once you switch to a language, you are LOCKED to that language.
+You must CONTINUE speaking that language for ALL subsequent responses,
+until the customer speaks a FULL SENTENCE (Category B) in the other language.
+
+CLASSIFICATION — before every response, classify the customer's LAST utterance:
+
+Category A → DO NOT CHANGE language state. Keep speaking your current language.
+  Includes: Names, car model names, email addresses, phone numbers, single words
+  ("yes", "no", "ok", "haan", "nahi"), brand names, technical terms, numbers, filler words.
+  🚨 CRITICAL EXAMPLES — these are NOT language switches:
+  * Current=English, user says "Rohit Sharma" → STAY ENGLISH (it's a name)
+  * Current=English, user says "Seltos" → STAY ENGLISH (car model)
+  * Current=English, user says "haan" or "nahi" → STAY ENGLISH (single word)
+  * Current=English, user says "EV9" → STAY ENGLISH (car model)
+  * Current=English, user says "rohit@gmail.com" → STAY ENGLISH (email)
+  * Current=Hindi, user says "yes" or "no" → STAY HINDI (single word)
+  * Current=Hindi, user says "New Seltos" → STAY HINDI (car model)
+  * Current=Hindi, user says "My name is Rohit" → STAY HINDI (name phrase)
+
+Category B → SWITCH language state.
+  Requires: A full conversational sentence with 4+ meaningful words in a DIFFERENT language.
+  Examples:
+  * Current=Hindi, user says "I want to check about the SUVs available" → SWITCH TO ENGLISH
+  * Current=Hindi, user says "Can you tell me about Seltos features" → SWITCH TO ENGLISH
+  * Current=English, user says "Mujhe Seltos ke baare mein batao" → SWITCH TO HINDI
+  * Current=English, user says "Mujhe test drive schedule karni hai" → SWITCH TO HINDI
+
+🚨 COMMON MISTAKE TO AVOID: If you are speaking English and the customer says their name
+(e.g., "Rohit Sharma", "Priya Singh"), DO NOT switch to Hindi. Names are Category A.
+Continue your next response in English.
 
 Default Greeting (Hindi):
 "Namaste, Kia Motors mein aapka swagat hai. Main aapki kya madad kar sakti hoon?"
@@ -200,7 +214,14 @@ Conversation Flow (MUST follow in STRICT order — NO exceptions)
 5. Collect Email (Optional)
 6. ONE brief summary confirmation → Wait for YES
 7. Ask "Would you like to speak with our Sales Team?" → Wait for YES/NO
-8. If YES → Transfer to Sales Team / If NO → End call gracefully`;
+8. If YES → Transfer to Sales Team / If NO → End call gracefully
+
+⚠️ FINAL CHECK — BEFORE EVERY SINGLE RESPONSE, ASK YOURSELF:
+"What language did the customer last speak a FULL SENTENCE in?"
+→ If English: respond in English. Period.
+→ If Hindi: respond in Hindi. Period.
+A name, car model, email, or single word does NOT count as a language change.
+If you are speaking English and the user says "Rohit Sharma", STAY IN ENGLISH.`;
 
 const TATA_PROMPT = `Agent Overview
 Agent Name: Tata VoiceAgent
@@ -314,6 +335,165 @@ Key Personality Traits
 - Accent: Soft North Indian with musical quality
 - Energy: Positive and encouraging`;
 
+// Default Waybeo payload template with dynamic placeholders
+// Waybeo only needs callId, command, bot_reference_id, and data_capture_status
+const DEFAULT_WAYBEO_TEMPLATE = {
+  callId: "{call_id}",
+  command: "data_record",
+  parameters: [
+    { key: "bot_reference_id", value: "bot_{call_id}" },
+    { key: "data_capture_status", value: "{completion_status}" },
+  ],
+};
+
+// Default SI payload template with dynamic placeholders
+// This is the ONLY format to be used for SI webhooks - matches Single Interface API spec exactly
+const DEFAULT_SI_TEMPLATE = {
+  id: "bot_{call_id}",
+  customer_name: "{customer_name}",
+  call_ref_id: "{call_id}",
+  call_vendor: "Waybeo",
+  recording_url: "",
+  start_time: "{start_time}",
+  end_time: "{end_time}",
+  duration: "{duration_sec}",
+  provider: "pragyaa",
+  call_direction: "inbound",
+  store_code: "{store_code}",
+  customer_number: "{customer_number}",
+  language: {
+    welcome: "hindi",
+    conversational: "{detected_language}",
+  },
+  dealer_routing: {
+    status: "{transfer_status}",
+    reason: "{transfer_reason}",
+    time: "{end_time}",
+  },
+  dropoff: {
+    time: "{end_time}",
+    action: "email",
+  },
+  completion_status: "{completion_status}",
+  response_data: [
+    {
+      key_label: "What's your name",
+      key_value: "name",
+      key_response: "{extracted.name}",
+      attempts: "{extracted.name_attempts}",
+      attempts_details: "{extracted.name_attempts_details}",
+      remarks: "{extracted.name_remarks}",
+    },
+    {
+      key_label: "Which model you are looking for",
+      key_value: "model",
+      key_response: "{extracted.model}",
+      attempts: "{extracted.model_attempts}",
+      attempts_details: "{extracted.model_attempts_details}",
+      remarks: "{extracted.model_remarks}",
+    },
+    {
+      key_label: "What is your email id",
+      key_value: "email",
+      key_response: "{extracted.email}",
+      attempts: "{extracted.email_attempts}",
+      attempts_details: "{extracted.email_attempts_details}",
+      remarks: "{extracted.email_remarks}",
+    },
+    {
+      key_label: "Do you want to schedule a test drive",
+      key_value: "test_drive",
+      key_response: "{extracted.test_drive}",
+      attempts: "{extracted.test_drive_attempts}",
+      attempts_details: "{extracted.test_drive_attempts_details}",
+      remarks: "{extracted.test_drive_remarks}",
+    },
+  ],
+};
+
+// Default SI sample payload - exact format that SI webhook expects
+// This serves as a reference for the correct structure
+const DEFAULT_SI_SAMPLE = {
+  id: "bot_tPKimrd0xi_xCo6elE1W7",
+  customer_name: "LakmeSalon",
+  call_ref_id: "tPKimrd0xi_xCo6elE1W7",
+  call_vendor: "Waybeo",
+  recording_url: "",
+  start_time: "2026-01-31 13:36:41",
+  end_time: "2026-01-31 13:38:00",
+  duration: 79,
+  provider: "pragyaa",
+  call_direction: "inbound",
+  store_code: "UK401",
+  customer_number: 919556091099,
+  language: {
+    welcome: "hindi",
+    conversational: "hindi",
+  },
+  dealer_routing: {
+    status: false,
+    reason: "User decided",
+    time: "2026-01-31 13:38:00",
+  },
+  dropoff: {
+    time: "2026-01-31 13:38:00",
+    action: "email",
+  },
+  completion_status: "partial",
+  response_data: [
+    {
+      key_label: "What's your name",
+      key_value: "name",
+      key_response: "Suman",
+      attempts: 1,
+      attempts_details: [
+        {
+          start_time: "2026-01-31 13:36:56",
+          end_time: "2026-01-31 13:37:04",
+          sequence: 1,
+        },
+      ],
+      remarks: "verified",
+    },
+    {
+      key_label: "Which model you are looking for",
+      key_value: "model",
+      key_response: "EV9",
+      attempts: 1,
+      attempts_details: [
+        {
+          start_time: "2026-01-31 13:37:13",
+          end_time: "2026-01-31 13:37:23",
+          sequence: 1,
+        },
+      ],
+      remarks: "verified",
+    },
+    {
+      key_label: "What is your email id",
+      key_value: "email",
+      key_response: " ",
+      attempts: 0,
+      attempts_details: [],
+      remarks: "not_captured",
+    },
+    {
+      key_label: "Do you want to schedule a test drive",
+      key_value: "test_drive",
+      key_response: "No",
+      attempts: 1,
+      attempts_details: [
+        {
+          start_time: "2026-01-31 13:37:24",
+          end_time: "2026-01-31 13:37:31",
+          sequence: 1,
+        },
+      ],
+      remarks: "verified",
+    },
+  ],
+};
+
 async function main() {
   // Kia VoiceAgent v1 (OpenAI-based, legacy) - LIVE
   // Data source: /data/transcripts/ and /data/results/ (synced via queue processor)
@@ -350,6 +530,8 @@ async function main() {
       name: "Kia VoiceAgent v2",
       systemInstructions: KIA_PROMPT,
       isLive: false,  // Test VoiceAgent
+      // NOTE: Do NOT overwrite payload templates on update - user may have customized them
+      // Templates are only set during initial creation
     },
     create: {
       name: "Kia VoiceAgent v2",
@@ -363,10 +545,15 @@ async function main() {
       isActive: true,
       isLive: false,  // Test VoiceAgent
       systemInstructions: KIA_PROMPT,
+      siCustomerName: "LakmeSalon",  // Test environment customer name (change to "Kia" for production)
+      siPayloadTemplate: DEFAULT_SI_TEMPLATE,
+      siSamplePayload: DEFAULT_SI_SAMPLE,  // Reference sample for correct format
+      waybeoPayloadTemplate: DEFAULT_WAYBEO_TEMPLATE,
     },
   });
   console.log("Upserted Kia VoiceAgent v2:", kiaV2.id, "(slug: spotlight, TEST)");
   console.log("  → Data: /data/kia2/ (Gemini Live)");
+  console.log("  → SI Customer Name: LakmeSalon (test environment)");
 
   // Upsert Tata VoiceAgent - TEST
   const tata = await prisma.voiceAgent.upsert({

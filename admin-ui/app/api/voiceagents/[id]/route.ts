@@ -19,6 +19,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   // DEBUG: Log whether sample payloads are returned from DB
   console.log(`[GET /api/voiceagents/${params.id}] siSamplePayload: ${voiceAgent.siSamplePayload ? 'EXISTS (' + JSON.stringify(voiceAgent.siSamplePayload).substring(0, 80) + '...)' : 'NULL'}`);
   console.log(`[GET /api/voiceagents/${params.id}] waybeoSamplePayload: ${voiceAgent.waybeoSamplePayload ? 'EXISTS' : 'NULL'}`);
+  console.log(`[GET /api/voiceagents/${params.id}] siPayloadTemplate first 3 keys: ${voiceAgent.siPayloadTemplate ? JSON.stringify(Object.keys(voiceAgent.siPayloadTemplate as object).slice(0, 3)) : 'NULL'}`);
+  console.log(`[GET /api/voiceagents/${params.id}] siPayloadTemplate.id value: ${voiceAgent.siPayloadTemplate && typeof voiceAgent.siPayloadTemplate === 'object' && 'id' in voiceAgent.siPayloadTemplate ? (voiceAgent.siPayloadTemplate as any).id : 'N/A'}`);
   return NextResponse.json(voiceAgent);
 }
 

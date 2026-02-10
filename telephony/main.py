@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
@@ -95,6 +96,10 @@ class TelephonySession:
     # Webhook response tracking (for Admin UI display)
     si_webhook_response: Optional[Dict[str, Any]] = None
     waybeo_webhook_response: Optional[Dict[str, Any]] = None
+    # Language enforcement state
+    language_state: str = "hindi"            # Current expected language (hindi or english)
+    current_turn_user_text: str = ""         # Accumulated user text for current turn
+    language_correction_pending: bool = False # Set after mismatch injection
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -145,7 +150,11 @@ def _extract_function_call(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _normalize_text(text: Optional[str]) -> str:
-    return (text or "").strip().lower()
+    """Normalize text for pattern matching: lowercase, strip, collapse whitespace."""
+    if not text:
+        return ""
+    # Collapse multiple spaces into single space (handles accumulated chunks with double spaces)
+    return re.sub(r'\s+', ' ', text.strip().lower())
 
 
 def _is_affirmative(text: Optional[str]) -> bool:
@@ -217,6 +226,217 @@ def _is_transfer_question(text: Optional[str]) -> bool:
     )
 
 
+def _is_goodbye_message(text: Optional[str]) -> bool:
+    """
+    Detect if the agent is saying a goodbye/sign-off message.
+
+    Used as a safety-net to trigger hangup when Gemini forgets to call
+    end_call() AND the transfer question was never properly detected.
+
+    Only matches phrases that appear at call endings — NOT generic
+    "thank you" that could appear mid-conversation.
+    """
+    if not text:
+        return False
+    normalized = text.lower().strip()
+    goodbye_phrases = [
+        "have a great day",
+        "have a good day",
+        "have a nice day",
+        "din shubh ho",
+        "aapka din shubh",
+        "namaste aur dhanyawad",
+        "call karne ke liye dhanyawad",
+        "thank you for calling",
+        "thanks for calling",
+        "goodbye",
+        "good bye",
+        "alvida",
+    ]
+    return any(phrase in normalized for phrase in goodbye_phrases)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Runtime Language Detection & Enforcement
+# ────────────────────────────────────────────────────────────────────────────
+# Prompt-based language lock is NOT sufficient for Gemini Live Audio because
+# the model uses audio context (accent/prosody) to decide output language.
+# This runtime layer detects language mismatches and injects corrections.
+# ────────────────────────────────────────────────────────────────────────────
+
+# Common Hindi words in Latin script (Romanized Hindi)
+_HINDI_WORDS = frozenset({
+    "mein", "hai", "hain", "ho", "hoon", "hun", "tha", "thi",
+    "kya", "aur", "nahi", "haan", "ji", "naa",
+    "chahiye", "chahenge", "chahte", "chahti",
+    "karni", "karna", "karte", "karti", "karo",
+    "batao", "bata", "batana", "bataye",
+    "mujhe", "humko", "hamein", "unko",
+    "humare", "aapka", "aapke", "aapki", "tumhara",
+    "toh", "theek", "accha", "bahut",
+    "abhi", "kal", "aaj", "parso",
+    "dena", "denge", "dijiye",
+    "lena", "lenge", "lijiye",
+    "suno", "suniye", "dekho", "dekhiye",
+    "apna", "apni", "apne",
+    "yeh", "woh", "koi", "kuch",
+    "lekin", "ya", "phir", "agar",
+    "dhanyawad", "shukriya", "namaste",
+    "baat", "gaadi", "paisa", "naam",
+    "ka", "ki", "ke", "ko", "se", "pe", "par", "tak",
+    "mera", "teri", "uska", "uski",
+    "kaisa", "kaisi", "kaise", "kitna", "kitni",
+    "jaldi", "dhire", "achha",
+    "swagat", "madad", "sakti", "sakta",
+})
+
+
+def _is_data_response(text: str) -> bool:
+    """
+    Detect if text is a data-point response (name, yes/no, date/time,
+    car model, address, email).  These should NEVER trigger a language
+    switch, even if they exceed the 4-word threshold.
+    """
+    tl = text.lower().strip()
+    if not tl:
+        return False
+
+    # ── 1. Yes/No / affirmative / negative responses ──
+    # "yes", "yeah day after tomorrow", "no thanks", "sure why not"
+    _YES_NO_STARTS = (
+        "yes", "no", "yeah", "yep", "nah", "ok", "okay", "sure",
+        "haan", "nahi", "nahin", "ji", "bilkul", "theek", "hmm",
+        "accha", "right",
+    )
+    for prefix in _YES_NO_STARTS:
+        if tl == prefix or tl.startswith(prefix + " ") or tl.startswith(prefix + ","):
+            return True
+
+    # ── 2. Name-giving phrases ──
+    # "My name is Rohit Sharma", "I am Rohit", "naam Rohit hai"
+    _NAME_PATTERNS = (
+        "my name is", "my name's", "i am ", "i'm ", "this is ",
+        "naam ", "mera naam", "it's ", "call me ",
+    )
+    for p in _NAME_PATTERNS:
+        if p in tl:
+            return True
+
+    # ── 3. Date/time responses (test-drive scheduling) ──
+    # "day after tomorrow", "next Monday", "this Saturday"
+    _DATE_WORDS = {
+        "tomorrow", "today", "yesterday",
+        "monday", "tuesday", "wednesday", "thursday",
+        "friday", "saturday", "sunday",
+        "kal", "aaj", "parso",
+        "next week", "this week", "day after",
+    }
+    for dw in _DATE_WORDS:
+        if dw in tl:
+            return True
+
+    # ── 4. Address / location indicators ──
+    # "42 MG Road Koramangala Bangalore"
+    _ADDR_WORDS = {
+        "road", "street", "nagar", "colony", "sector", "marg",
+        "lane", "avenue", "block", "phase", "floor", "flat",
+        "building", "chowk", "bazaar", "market", "pin code",
+        "pincode", "area",
+    }
+    for aw in _ADDR_WORDS:
+        if aw in tl:
+            return True
+
+    # ── 5. Phone number responses ──
+    # "9876543210", "my number is 9876543210"
+    digits = sum(1 for c in tl if c.isdigit())
+    if digits >= 7:  # Likely a phone number
+        return True
+
+    return False
+
+
+def _detect_language(text: str) -> tuple:
+    """
+    Detect language and category from transcription text.
+    Returns (language, category):
+      ("hindi", "A"|"B"), ("english", "A"|"B"), ("unknown", "A")
+
+    Category A: Names, single words, car models, emails, data responses
+               — do NOT change language state.
+    Category B: Full conversational sentence (4+ meaningful words,
+               NOT a data response) — CHANGES language state.
+    """
+    if not text or not text.strip():
+        return ("unknown", "A")
+
+    # ── Always Category A: emails, phone numbers, single-word items ──
+    # Emails contain @ or common domain fragments — NEVER switch language for them
+    text_lower = text.lower()
+    if "@" in text or any(d in text_lower for d in [
+        "gmail", "yahoo", "hotmail", "outlook", ".com", ".in", ".co"
+    ]):
+        return ("unknown", "A")
+
+    # ── Always Category A: data-point responses ──
+    # Names, yes/no, dates, addresses, car models — these are answers
+    # to data-collection questions, NOT language switches.
+    if _is_data_response(text):
+        return ("unknown", "A")
+
+    # Check for Devanagari script → likely Hindi
+    has_devanagari = any("\u0900" <= c <= "\u097F" for c in text)
+
+    # Split into meaningful words (filter single chars & punctuation)
+    words = [w.strip(".,!?;:\"'()@") for w in text.split()]
+    meaningful = [w for w in words if len(w) > 1]
+
+    if has_devanagari:
+        # Even with Devanagari, require 4+ meaningful words that are NOT
+        # just a name/email (which may be transcribed in Devanagari).
+        if len(meaningful) < 4:
+            return ("hindi", "A")
+        # Check if it looks like a sentence (has verb-like Hindi words)
+        has_sentence_words = any(
+            w in _HINDI_WORDS
+            for w in (w.strip(".,!?;:\"'()") for w in text.split())
+            if len(w) > 2
+        )
+        return ("hindi", "B") if has_sentence_words else ("hindi", "A")
+
+    # All Latin script — check word count for category
+    if len(meaningful) < 4:
+        return ("unknown", "A")  # Too short → Category A (names, models, etc.)
+
+    # Count Hindi words in Romanized text
+    hindi_count = sum(1 for w in meaningful if w.lower() in _HINDI_WORDS)
+    hindi_ratio = hindi_count / max(len(meaningful), 1)
+
+    if hindi_ratio >= 0.25 or hindi_count >= 3:
+        return ("hindi", "B")
+    else:
+        return ("english", "B")
+
+
+def _detect_agent_language(text: str) -> str:
+    """Detect which language the agent is speaking from accumulated turn text."""
+    if not text or not text.strip():
+        return "unknown"
+
+    words = [w.strip(".,!?;:\"'()").lower() for w in text.split() if len(w.strip(".,!?;:\"'()")) > 1]
+    if not words:
+        return "unknown"
+
+    hindi_count = sum(1 for w in words if w in _HINDI_WORDS)
+    total = len(words)
+
+    if total == 0:
+        return "unknown"
+
+    # If 20%+ of agent's words are Hindi → speaking Hindi
+    if hindi_count / total >= 0.20:
+        return "hindi"
+    return "english"
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -695,7 +915,28 @@ async def _gemini_reader(
                 func_id = func_call.get("id", "")
                 reason = func_args.get("reason", "User decision")
                 call_duration = time.time() - session.call_start_time
-                
+
+                # ── Block function calls during language correction ──
+                # When we inject a language hint, Gemini sometimes interprets
+                # it as needing to call transfer_call().  Silently absorb the
+                # call and tell Gemini to continue the conversation normally.
+                if session.language_correction_pending:
+                    print(
+                        f"[{session.ucid}] ⚠️ Ignoring {func_name}() during language correction"
+                    )
+                    try:
+                        await session.gemini.send_function_response(
+                            call_id=func_id,
+                            func_name=func_name,
+                            response={
+                                "status": "ignored",
+                                "note": "Continue the conversation. Do not transfer or end the call. Re-ask your last question in the correct language.",
+                            },
+                        )
+                    except Exception:
+                        pass
+                    continue
+
                 # Minimal safeguard: reject only during initial WebSocket setup (<10s)
                 # After that, trust Gemini completely — including on-demand transfer
                 if call_duration < 10:
@@ -710,31 +951,66 @@ async def _gemini_reader(
                         print(f"[{session.ucid}] ⚠️ Failed to send function rejection: {e}")
                     continue
 
-                async def _reject_call(message: str) -> None:
+                async def _reject_call(message: str, redirect: str = "") -> None:
+                    """Reject a Gemini function call with explicit redirect instructions.
+                    
+                    The redirect message tells Gemini exactly what to do next,
+                    preventing it from saying "I'll connect you to Sales Team"
+                    after a rejected transfer_call().
+                    """
                     print(f"[{session.ucid}] ⚠️ REJECTED {func_name}() - {message}")
+                    # Build response with explicit redirect so Gemini doesn't go off-script
+                    rejection_response: Dict[str, Any] = {"error": message}
+                    if redirect:
+                        rejection_response["instruction"] = redirect
                     try:
                         await session.gemini.send_function_response(
                             call_id=func_id,
                             func_name=func_name,
-                            response={"error": message},
+                            response=rejection_response,
                         )
                     except Exception as e:
                         print(f"[{session.ucid}] ⚠️ Failed to send function rejection: {e}")
                 
                 if func_name == "transfer_call":
                     allow_transfer = False
+
+                    # Debug: log exact state for transfer validation
+                    print(
+                        f"[{session.ucid}] 🔍 Transfer validation: "
+                        f"last_user='{session.last_user_text}', "
+                        f"q_asked={session.transfer_question_asked_at is not None}, "
+                        f"q_answered={session.transfer_question_answered}, "
+                        f"answer_text='{session.last_transfer_answer_text}', "
+                        f"turn_user='{(session.current_turn_user_text or '').strip()[:50]}'"
+                    )
+
                     if _is_explicit_transfer_request(session.last_user_text):
                         allow_transfer = True
                     elif (
                         session.transfer_question_asked_at
                         and session.transfer_question_answered
-                        and _is_affirmative(session.last_transfer_answer_text)
                     ):
-                        allow_transfer = True
+                        # Gemini already heard the audio and decided the user
+                        # wants to transfer.  Trust Gemini's decision UNLESS
+                        # the transcribed answer is explicitly negative.
+                        if _is_negative(session.last_transfer_answer_text):
+                            # User said "no" — reject the transfer
+                            pass
+                        else:
+                            # User said yes / affirmative / unclear → trust Gemini
+                            allow_transfer = True
 
                     if not allow_transfer:
                         await _reject_call(
-                            "Transfer requires explicit user YES to the Sales Team question or a direct transfer request."
+                            "TRANSFER DENIED. You have NOT completed the required steps.",
+                            redirect=(
+                                "Do NOT transfer. Do NOT mention Sales Team. Do NOT say 'connect'. "
+                                "Continue the NORMAL conversation flow: "
+                                "1) Ask customer's NAME first, 2) Ask car MODEL, "
+                                "3) Ask about TEST DRIVE, 4) Ask for EMAIL. "
+                                "Respond to the customer's last message naturally."
+                            ),
                         )
                         continue
 
@@ -765,7 +1041,13 @@ async def _gemini_reader(
                     
                     if not allow_end:
                         await _reject_call(
-                            "End call too early - transfer question not yet asked."
+                            "END CALL DENIED. Conversation is not complete yet.",
+                            redirect=(
+                                "Do NOT end the call. Do NOT say goodbye. "
+                                "Continue collecting data from the customer. "
+                                "You still need to ask the Sales Team transfer question. "
+                                "Respond to the customer's last message naturally."
+                            ),
                         )
                         continue
 
@@ -789,6 +1071,18 @@ async def _gemini_reader(
             # ─────────────────────────────────────────────────────────────────
             server_content = msg.get("serverContent", {})
             if server_content.get("turnComplete") and not session.hangup_sent:
+                # ── Language correction response handling — MUST be first ──
+                # If this turnComplete is from Gemini's response to our
+                # language injection, just reset flags and move on.
+                # We MUST check this BEFORE transfer-question detection,
+                # because the correction response may mention "Sales Team"
+                # and we don't want that to falsely set transfer_question_asked_at.
+                if session.language_correction_pending:
+                    session.language_correction_pending = False
+                    session.current_turn_agent_text = ""
+                    session.current_turn_user_text = ""
+                    continue
+
                 # ── Check accumulated agent text for transfer question ──
                 # Gemini sends transcription in small chunks (e.g. "Sales",
                 # "Team", "se baat", "chahenge?"). Individual chunks never
@@ -804,8 +1098,65 @@ async def _gemini_reader(
                         session.transfer_question_asked_at = time.time()
                         session.transfer_question_answered = False
                         session.last_transfer_answer_text = None
+
+                # ── Language enforcement at turn boundary ──
+                # Detect if agent's language matches expected state.
+                # If user spoke English but agent replied in Hindi,
+                # inject a corrective text context so Gemini adjusts.
+                if (
+                    session.current_turn_agent_text.strip()
+                    and not session.call_ending
+                    and not session.hangup_sent
+                ):
+                    agent_lang = _detect_agent_language(session.current_turn_agent_text)
+                    user_text = session.current_turn_user_text.strip()
+                    user_lang, user_cat = _detect_language(user_text) if user_text else ("unknown", "A")
+
+                    # Update language state on Category B user utterance
+                    if user_cat == "B" and user_lang in ("hindi", "english"):
+                        if session.language_state != user_lang:
+                            print(
+                                f"[{session.ucid}] 🌐 Language state: "
+                                f"{session.language_state} → {user_lang} "
+                                f"(Category B: '{user_text[:50]}')"
+                            )
+                        session.language_state = user_lang
+
+                    # Check for mismatch: agent spoke wrong language
+                    if (
+                        agent_lang != "unknown"
+                        and session.language_state != agent_lang
+                    ):
+                        print(
+                            f"[{session.ucid}] ⚠️ Language mismatch! "
+                            f"Expected={session.language_state}, "
+                            f"Agent spoke={agent_lang}. Injecting correction."
+                        )
+                        session.language_correction_pending = True
+                        # NOTE: Do NOT suppress audio. Gemini re-generates the question
+                        # in the correct language, and that audio SHOULD be played.
+                        # Buffer clearing (on interrupted event) already stops the
+                        # wrong-language audio mid-sentence.
+                        try:
+                            await session.gemini.inject_language_context(
+                                session.language_state
+                            )
+                        except Exception as e:
+                            print(f"[{session.ucid}] ⚠️ Language injection failed: {e}")
+                            session.language_correction_pending = False
+                        # Reset text and skip call-end logic for this turn
+                        session.current_turn_agent_text = ""
+                        session.current_turn_user_text = ""
+                        continue
+
+                # Grab accumulated turn text before reset (needed for goodbye check)
+                _turn_agent_text = session.current_turn_agent_text.strip()
+
                 # Reset accumulated text for next turn
                 session.current_turn_agent_text = ""
+                session.current_turn_user_text = ""
+
+                call_age = time.time() - session.call_start_time
 
                 if session.call_ending:
                     # Normal path: Gemini called end_call/transfer_call, goodbye done
@@ -818,7 +1169,7 @@ async def _gemini_reader(
                     session.transfer_question_asked_at
                     and session.transfer_question_answered
                 ):
-                    # Safety net: Transfer question was asked AND user responded,
+                    # Safety net A: Transfer question was asked AND user responded,
                     # but Gemini said goodbye without calling end_call().
                     # This is state-based (not text matching) — the transfer
                     # question is always the final step, so if user answered and
@@ -832,6 +1183,23 @@ async def _gemini_reader(
                     # Set hangup_sent IMMEDIATELY to prevent duplicate tasks
                     session.hangup_sent = True
                     asyncio.create_task(_handle_call_end(session, cfg))
+                elif call_age > 30 and _is_goodbye_message(_turn_agent_text):
+                    # Safety net B: Goodbye detection.
+                    # Agent said a clear goodbye phrase (e.g. "Have a great day!")
+                    # but Gemini didn't call end_call() AND the transfer question
+                    # was never detected. This can happen when:
+                    #   - Language correction confused the flow
+                    #   - Gemini skipped the transfer question
+                    #   - Transfer question phrasing wasn't detected
+                    # Only triggers after 30s to avoid false positives on greetings.
+                    print(
+                        f"[{session.ucid}] 🔄 Goodbye detected — triggering hangup "
+                        f"(agent: '{_turn_agent_text[:60]}...', call_age={call_age:.0f}s)"
+                    )
+                    session.user_wants_transfer = False
+                    session.call_ending = True
+                    session.hangup_sent = True
+                    asyncio.create_task(_handle_call_end(session, cfg))
 
             # Capture transcription if present
             transcription = _extract_transcription(msg, debug=cfg.DEBUG)
@@ -843,6 +1211,8 @@ async def _gemini_reader(
                 if speaker == "user":
                     session.last_user_text = text
                     session.last_user_at = time.time()
+                    # Accumulate user text for language detection at turnComplete
+                    session.current_turn_user_text += " " + text
                     if session.transfer_question_asked_at and not session.transfer_question_answered:
                         session.transfer_question_answered = True
                         session.last_transfer_answer_text = text
@@ -861,6 +1231,23 @@ async def _gemini_reader(
             audio_b64 = _extract_audio_b64_from_gemini_message(msg)
             if not audio_b64:
                 continue
+
+            # Skip audio if Gemini is acknowledging language correction
+            # (e.g., "[Acknowledged. The customer is speaking Hindi...]")
+            if session.language_correction_pending:
+                agent_text_so_far = session.current_turn_agent_text.strip().lower()
+                # Detect acknowledgment phrases
+                ack_patterns = [
+                    "[acknowledged",
+                    "acknowledged.",
+                    "the customer is speaking",
+                    "i will respond in",
+                ]
+                if any(pattern in agent_text_so_far for pattern in ack_patterns):
+                    # Skip this audio chunk - it's the acknowledgment, not the re-asked question
+                    if cfg.DEBUG:
+                        print(f"[{session.ucid}] 🔇 Skipping acknowledgment audio during language correction")
+                    continue
 
             # Buffer audio — the _audio_sender task handles paced delivery
             samples_8k = audio_processor.process_output_gemini_b64_to_8k_samples(audio_b64)
@@ -991,7 +1378,7 @@ async def handle_client(client_ws, path: str):
         model_uri=cfg.model_uri,
         voice=cfg.GEMINI_VOICE,
         system_instructions=prompt,
-        temperature=0.7,  # Lower temperature for more measured, professional responses
+        temperature=0.5,  # Low temperature for stricter rule-following (language, tone)
         enable_affective_dialog=False,  # Disabled: prevent excited/emotional voice variations
         enable_input_transcription=True,   # Enable for transcript capture
         enable_output_transcription=True,  # Enable for transcript capture
@@ -1251,8 +1638,11 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
             print(f"[{session.ucid}] ⚠️ No conversation to save")
         return
 
-    end_time = datetime.now(timezone.utc)
-    duration_sec = int((end_time - session.start_time).total_seconds()) if session.start_time else 0
+    end_time_utc = datetime.now(timezone.utc)
+    duration_sec = int((end_time_utc - session.start_time).total_seconds()) if session.start_time else 0
+    # Convert to IST for all payload timestamps (payloads should always use IST)
+    end_time = end_time_utc.astimezone(IST)
+    start_time_ist = session.start_time.astimezone(IST) if session.start_time else end_time
 
     print(f"[{_ist_str()}] [{session.ucid}] 💾 Saving call data ({len(session.conversation)} entries, {duration_sec}s)")
 
@@ -1277,8 +1667,8 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
             metadata={
                 "agent": session.agent,
                 "duration_sec": duration_sec,
-                "start_time": session.start_time.isoformat() if session.start_time else None,
-                "end_time": end_time.isoformat() + "Z",
+                "start_time": start_time_ist.isoformat(),
+                "end_time": end_time.isoformat(),
             },
         )
         if not transcript_path:
@@ -1361,6 +1751,41 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
             detected_language = "english"
 
         # Build template context with all available data
+        # Ensure all timestamps are in IST for payload consistency
+        ctx_start = transcript_start or start_time_ist
+        ctx_end = transcript_end or end_time
+        # If parsed datetimes are naive (no tz info), assume IST; if UTC, convert
+        if ctx_start and ctx_start.tzinfo is None:
+            ctx_start = ctx_start.replace(tzinfo=IST)
+        elif ctx_start and ctx_start.tzinfo == timezone.utc:
+            ctx_start = ctx_start.astimezone(IST)
+        if ctx_end and ctx_end.tzinfo is None:
+            ctx_end = ctx_end.replace(tzinfo=IST)
+        elif ctx_end and ctx_end.tzinfo == timezone.utc:
+            ctx_end = ctx_end.astimezone(IST)
+
+        # Build extracted data with attempts/attempts_details/remarks for template rendering
+        # Extract from response_data for each field
+        def get_field_data(key_value: str):
+            """Extract attempts, attempts_details, remarks for a given key_value from response_data."""
+            item = next((r for r in response_data if r.get("key_value") == key_value), None)
+            if item:
+                return {
+                    f"{key_value}_attempts": item.get("attempts", 0),
+                    f"{key_value}_attempts_details": item.get("attempts_details", []),
+                    f"{key_value}_remarks": item.get("remarks", "not_captured"),
+                }
+            return {
+                f"{key_value}_attempts": 0,
+                f"{key_value}_attempts_details": [],
+                f"{key_value}_remarks": "not_captured",
+            }
+        
+        # Merge all extracted field data
+        extracted_with_metadata = {**extracted_data}
+        for key in ["name", "model", "email", "test_drive"]:
+            extracted_with_metadata.update(get_field_data(key))
+        
         template_context = {
             "call_id": session.ucid,
             "agent_slug": session.agent,
@@ -1369,19 +1794,17 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
             "store_code": session.store_code or "",
             "customer_number": session.customer_number or "",
             "vmn": session.vmn or "",  # Virtual Mobile Number (Kia number dialed)
-            "start_time": (transcript_start or session.start_time or end_time).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            ),
-            "end_time": (transcript_end or end_time).strftime("%Y-%m-%d %H:%M:%S"),
+            "start_time": ctx_start.strftime("%Y-%m-%d %H:%M:%S") if ctx_start else "",
+            "end_time": ctx_end.strftime("%Y-%m-%d %H:%M:%S") if ctx_end else "",
             "duration_sec": transcript_duration,
             "completion_status": completion_status,
             "detected_language": detected_language,
-            "transfer_status": "not_transferred",
-            "transfer_reason": "User decided",
+            "transfer_status": session.user_wants_transfer if session.user_wants_transfer is not None else False,
+            "transfer_reason": "User decided" if not session.user_wants_transfer else "User requested",
             "response_data": response_data,
             "transcript": transcript_conversation,
             "transcript_text": transcript_text,
-            "extracted": extracted_data,
+            "extracted": extracted_with_metadata,  # Now includes attempts/attempts_details/remarks
             "analytics": analytics,
         }
 
@@ -1395,21 +1818,16 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
                 )
             si_payload = rendered_si.payload
         else:
-            # Fallback to hardcoded payload builder
+            # Fallback to hardcoded payload builder (always IST)
             si_payload = payload_builder.build_payload(
                 conversation=transcript_conversation,
-                start_time=transcript_start or session.start_time,
-                end_time=transcript_end or end_time,
+                start_time=ctx_start,
+                end_time=ctx_end,
                 duration_sec=transcript_duration,
             )
 
-        # IMPORTANT: Always inject agent_slug for Admin UI VoiceAgent lookup
-        # This ensures calls are linked to the correct VoiceAgent even if
-        # the template doesn't include agent_slug
-        if isinstance(si_payload, dict):
-            si_payload["agent_slug"] = session.agent
-
-        # The CLEAN SI payload (no extra Admin UI fields) - this is what gets sent to SI webhook
+        # The CLEAN SI payload (exactly as rendered from template) - this is what gets sent to SI webhook
+        # Do NOT inject extra fields like agent_slug here - that would alter the user's template
         si_webhook_payload = dict(si_payload) if isinstance(si_payload, dict) else si_payload
 
         # Save clean SI payload to local file
@@ -1486,6 +1904,9 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
 
         # Build Admin UI payload with extra tracking fields
         admin_payload = dict(si_webhook_payload) if isinstance(si_webhook_payload, dict) else {}
+        # IMPORTANT: Inject agent_slug for Admin UI VoiceAgent lookup
+        # This is ONLY for internal tracking - not included in SI webhook payload
+        admin_payload["agent_slug"] = session.agent
         admin_payload["waybeo_payload"] = session.waybeo_payload
         admin_payload["call_control_event"] = session.call_control_event
         # Store webhook responses for Admin UI display

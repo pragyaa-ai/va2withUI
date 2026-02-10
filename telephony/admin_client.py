@@ -179,6 +179,7 @@ class AdminClient:
         
         import urllib.request
         import urllib.error
+        from collections import OrderedDict
         
         url = f"{self.base_url}/api/telephony/prompt/{agent_slug}"
         
@@ -188,7 +189,11 @@ class AdminClient:
             
             with urllib.request.urlopen(req, timeout=5) as resp:
                 if resp.status == 200:
-                    config = json.loads(resp.read().decode("utf-8"))
+                    # Use object_pairs_hook to preserve field order in templates
+                    config = json.loads(
+                        resp.read().decode("utf-8"),
+                        object_pairs_hook=OrderedDict
+                    )
                     self._agent_config_cache[agent_slug] = config
                     return config
         except urllib.error.HTTPError as e:
@@ -221,6 +226,14 @@ class AdminClient:
         """
         if not endpoint_url:
             return {"success": False, "status_code": 0, "response_body": "No endpoint configured"}
+        
+        # Log the payload being sent (truncated for readability)
+        payload_json = json.dumps(payload, indent=2)
+        if len(payload_json) > 1000:
+            payload_preview = payload_json[:1000] + "\n  ... (truncated)"
+        else:
+            payload_preview = payload_json
+        print(f"[{call_id}] 📤 {webhook_name} Payload:\n{payload_preview}")
         
         import urllib.request
         import urllib.error

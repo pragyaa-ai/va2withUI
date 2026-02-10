@@ -238,6 +238,38 @@ class GeminiLiveSession:
             }
         )
 
+    async def inject_language_context(self, language: str) -> None:
+        """
+        Inject a language enforcement hint into the Gemini session.
+
+        Sent as a 'user' turn via client_content so Gemini treats it as
+        conversational context and adjusts its language for the next response.
+        Gemini will generate a brief acknowledgment (audio should be suppressed
+        by the caller).
+        """
+        hint = (
+            f"[SYSTEM LANGUAGE CORRECTION — NOT a customer message. "
+            f"The customer is speaking {language.upper()}. "
+            f"You MUST switch to {language.upper()} immediately. "
+            f"Do NOT call transfer_call() or end_call(). "
+            f"Do NOT mention the Sales Team. "
+            f"Just re-ask your last question in {language.upper()}. "
+            f"Keep the conversation flowing naturally.]"
+        )
+        await self.send_json(
+            {
+                "client_content": {
+                    "turns": [
+                        {
+                            "role": "user",
+                            "parts": [{"text": hint}],
+                        }
+                    ],
+                    "turn_complete": True,
+                }
+            }
+        )
+
     async def send_function_response(
         self,
         call_id: str,
