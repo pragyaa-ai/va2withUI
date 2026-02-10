@@ -98,6 +98,7 @@ model VoiceAgent {
   sessions      CallSession[]
   feedback      Feedback[]
   vmnMappings   VmnMapping[]
+  carModels     CarModel[]
 
   @@index([isActive])
   @@index([phoneNumber])
@@ -120,6 +121,28 @@ model VmnMapping {
   @@unique([voiceAgentId, vmn])  // Each VMN can only be mapped once per agent
   @@index([voiceAgentId])
   @@index([vmn])
+}
+
+// Car model catalog for a VoiceAgent
+// Stores model names, pronunciations, and key features
+// Auto-injected into system instructions at call time
+model CarModel {
+  id            String      @id @default(cuid())
+  voiceAgentId  String
+  modelName     String      // e.g. "SYROS", "NEW SELTOS"
+  pronunciation String?     // e.g. "SIGH-ross"
+  phonetic      String?     // IPA e.g. "/ˈsaɪrɒs/"
+  vehicleType   String?     // e.g. "New Age SUV", "Premium MPV"
+  keyFeatures   String?     @db.Text  // Feature details (structured text)
+  displayOrder  Int         @default(0)
+  isActive      Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  voiceAgent    VoiceAgent  @relation(fields: [voiceAgentId], references: [id], onDelete: Cascade)
+
+  @@unique([voiceAgentId, modelName])
+  @@index([voiceAgentId])
 }
 
 model CallFlow {

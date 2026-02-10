@@ -24,7 +24,7 @@ TRANSCRIPT:
 
 EXTRACT THE FOLLOWING DATA:
 1. name - Customer's full name
-2. model - Car model they are interested in (e.g., Seltos, EV9, Sonet, Nexon, etc.)
+2. model - Car model they are interested in (Kia models: NEW SELTOS, SYROS, SELTOS, CARENS CLAVIS, SONET, CARENS CLAVIS EV, CARENS, EV6, EV9, CARNIVAL. Other brands: Nexon, Punch, etc.)
 3. email - Customer's email address
 4. test_drive - Whether they want a test drive (yes/no)
 5. phone - Customer's phone number
@@ -186,6 +186,119 @@ class GeminiExtractor:
         except json.JSONDecodeError as e:
             print(f"❌ Failed to parse Gemini response as JSON: {e}")
             return self._empty_result("JSON parse error")
+
+    async def generate_summary_and_sentiment(
+        self,
+        conversation: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Generate call summary and sentiment analysis from conversation transcript.
+
+        Args:
+            conversation: List of conversation entries with speaker, text, timestamp
+
+        Returns:
+            Dictionary with summary, sentiment, and sentimentScore
+        """
+        if not self.api_key:
+            print("⚠️ GEMINI_API_KEY not configured, skipping summary generation")
+            return {"summary": None, "sentiment": None, "sentimentScore": None}
+
+        transcript_text = self._format_transcript(conversation)
+        if not transcript_text.strip():
+            return {"summary": None, "sentiment": None, "sentimentScore": None}
+
+        prompt = f"""Analyze the following customer service call transcript from an automotive dealership VoiceAgent.
+
+Provide:
+1. Overall sentiment (POSITIVE, NEUTRAL, or NEGATIVE) based on customer satisfaction
+2. Sentiment score from 0.0 to 1.0 (0.0 = very negative, 0.5 = neutral, 1.0 = very positive)
+3. A concise 2-3 sentence summary of the call covering: what the customer wanted, what information was exchanged, and the outcome
+
+TRANSCRIPT:
+{transcript_text}
+
+Respond ONLY with valid JSON (no markdown, no backticks):
+{{
+  "sentiment": "POSITIVE",
+  "sentimentScore": 0.75,
+  "summary": "Summary text here"
+}}"""
+
+        try:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None, self._call_gemini_summary, prompt
+            )
+            return result
+        except Exception as e:
+            print(f"❌ Summary generation error: {e}")
+            return {"summary": None, "sentiment": None, "sentimentScore": None}
+
+    def _call_gemini_summary(self, prompt: str) -> Dict[str, Any]:
+        """Make synchronous API call to Gemini for summary/sentiment."""
+        url = f"{self.api_url}?key={self.api_key}"
+
+        payload = {
+            "contents": [
+                {
+                    "parts": [{"text": prompt}]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.2,
+                "maxOutputTokens": 500,
+            }
+        }
+
+        req = Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        try:
+            with urlopen(req, timeout=30) as response:
+                response_data = json.loads(response.read().decode("utf-8"))
+
+            candidates = response_data.get("candidates", [])
+            if not candidates:
+                return {"summary": None, "sentiment": None, "sentimentScore": None}
+
+            content = candidates[0].get("content", {})
+            parts = content.get("parts", [])
+            if not parts:
+                return {"summary": None, "sentiment": None, "sentimentScore": None}
+
+            text = parts[0].get("text", "")
+
+            # Parse JSON from response
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0]
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0]
+
+            # Find JSON object in response
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', text.strip())
+            if not json_match:
+                return {"summary": None, "sentiment": None, "sentimentScore": None}
+
+            result = json.loads(json_match.group())
+            return {
+                "summary": result.get("summary"),
+                "sentiment": result.get("sentiment"),
+                "sentimentScore": float(result["sentimentScore"]) if result.get("sentimentScore") is not None else None,
+            }
+
+        except HTTPError as e:
+            error_body = e.read().decode("utf-8") if e.fp else ""
+            print(f"❌ Gemini summary API error {e.code}: {error_body[:200]}")
+            return {"summary": None, "sentiment": None, "sentimentScore": None}
+        except (URLError, json.JSONDecodeError) as e:
+            print(f"❌ Gemini summary error: {e}")
+            return {"summary": None, "sentiment": None, "sentimentScore": None}
 
     def _empty_result(self, reason: str) -> Dict[str, Any]:
         """Return empty extraction result."""

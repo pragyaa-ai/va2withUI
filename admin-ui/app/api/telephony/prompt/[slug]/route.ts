@@ -36,6 +36,18 @@ export async function GET(
           select: { name: true, ruleText: true },
           orderBy: { createdAt: "asc" },
         },
+        // Fetch active car models for injection into system instructions
+        carModels: {
+          where: { isActive: true },
+          select: {
+            modelName: true,
+            pronunciation: true,
+            phonetic: true,
+            vehicleType: true,
+            keyFeatures: true,
+          },
+          orderBy: { displayOrder: "asc" },
+        },
         // Payload templates and webhook endpoints for post-call delivery
         siPayloadTemplate: true,
         waybeoPayloadTemplate: true,
@@ -75,8 +87,58 @@ export async function GET(
       FARHAN: "Fenrir",
     };
 
-    // Inject enabled guardrails into system instructions
+    // Build full system instructions with dynamic injections
     let fullInstructions = agent.systemInstructions || "";
+
+    // 1. Inject current date context at the top
+    const today = new Date().toLocaleDateString("en-IN", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      timeZone: "Asia/Kolkata",
+    });
+    fullInstructions = `[Current Date: ${today}. Use this date for all time references. Current year is ${new Date().getFullYear()}.]\n\n` + fullInstructions;
+
+    // 2. Inject car models with pronunciations and features
+    if (agent.carModels && agent.carModels.length > 0) {
+      const modelNames = agent.carModels.map((m) => m.modelName).join(", ");
+
+      // Pronunciation guide
+      const pronunciationLines = agent.carModels
+        .filter((m) => m.pronunciation)
+        .map((m) => `- ${m.modelName}: pronounce as "${m.pronunciation}"${m.phonetic ? ` ${m.phonetic}` : ""}`)
+        .join("\n");
+
+      // Features section
+      const featureLines = agent.carModels
+        .filter((m) => m.keyFeatures)
+        .map((m) => {
+          const typeLabel = m.vehicleType ? ` (${m.vehicleType})` : "";
+          return `${m.modelName}${typeLabel}:\n${m.keyFeatures}`;
+        })
+        .join("\n\n");
+
+      let carModelSection = `\n\n--- AVAILABLE CAR MODELS ---`;
+      carModelSection += `\nYou MUST use these exact model names. These are the ONLY models currently available.`;
+      carModelSection += `\nSupported Models: ${modelNames}`;
+
+      if (pronunciationLines) {
+        carModelSection += `\n\nPronunciation Guide (use these exact pronunciations when speaking model names):`;
+        carModelSection += `\n${pronunciationLines}`;
+      }
+
+      if (featureLines) {
+        carModelSection += `\n\n--- CAR MODEL FEATURES (Share ONLY when customer asks about a specific model) ---`;
+        carModelSection += `\nIMPORTANT: Do NOT volunteer feature information unprompted. Only share 1-2 relevant features per turn when asked.`;
+        carModelSection += `\n\n${featureLines}`;
+        carModelSection += `\n--- END FEATURES ---`;
+      }
+
+      carModelSection += `\n--- END CAR MODELS ---`;
+      fullInstructions += carModelSection;
+    }
+
+    // 3. Inject enabled guardrails
     if (agent.guardrails && agent.guardrails.length > 0) {
       const guardrailRules = agent.guardrails
         .map((g, i) => `${i + 1}. ${g.name}: ${g.ruleText}`)

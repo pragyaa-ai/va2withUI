@@ -11,6 +11,7 @@ const allTabs = [
   { segment: "", label: "Overview", roles: ["ADMIN", "USER"] },
   { segment: "/calls", label: "Calls", roles: ["ADMIN", "USER"] },
   { segment: "/instructions", label: "Configuration", roles: ["ADMIN"] },
+  { segment: "/car-models", label: "Car Models", roles: ["ADMIN"] },
   { segment: "/callflow", label: "Call Flow", roles: ["ADMIN"] },
   { segment: "/guardrails", label: "Guardrails", roles: ["ADMIN"] },
   { segment: "/voice", label: "Voice", roles: ["ADMIN"] },
