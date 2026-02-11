@@ -207,6 +207,4 @@ journalctl -u voiceagent-telephony -f
 
 - Verify GCP project ID
 - Check ADC credentials: gcloud auth application-default print-access-token
-- Ensure Vertex AI API is enabled
-
-## LicenseCopyright (c) Pragyaa.ai. All rights reserved.
+- Ensure Vertex AI API is enabled## LicenseCopyright (c) Pragyaa.ai. All rights reserved.
