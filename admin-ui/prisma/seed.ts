@@ -572,6 +572,10 @@ async function main() {
       systemInstructions: TATA_PROMPT,
       isLive: false,  // Test VoiceAgent
       siCustomerName: "LakmeSalon",  // Test environment (same as Kia v2)
+      siPayloadTemplate: DEFAULT_SI_TEMPLATE,  // Ensure correct template with provider/call_direction
+      waybeoPayloadTemplate: DEFAULT_WAYBEO_TEMPLATE,
+      siSamplePayload: DEFAULT_SI_SAMPLE,
+      waybeoSamplePayload: DEFAULT_WAYBEO_SAMPLE,
     },
     create: {
       name: "Tata VoiceAgent",
@@ -604,6 +608,10 @@ async function main() {
       systemInstructions: SKODA_PROMPT,
       isLive: false,  // Test VoiceAgent
       siCustomerName: "LakmeSalon",  // Test environment (same as Kia v2)
+      siPayloadTemplate: DEFAULT_SI_TEMPLATE,  // Ensure correct template with provider/call_direction
+      waybeoPayloadTemplate: DEFAULT_WAYBEO_TEMPLATE,
+      siSamplePayload: DEFAULT_SI_SAMPLE,
+      waybeoSamplePayload: DEFAULT_WAYBEO_SAMPLE,
     },
     create: {
       name: "Skoda VoiceAgent",
