@@ -574,10 +574,17 @@ async function main() {
       isActive: true,
       isLive: false,  // Test VoiceAgent
       systemInstructions: TATA_PROMPT,
+      // Payload templates - using same format as Kia v2 for testing
+      siPayloadTemplate: DEFAULT_SI_TEMPLATE,
+      waybeoPayloadTemplate: DEFAULT_WAYBEO_TEMPLATE,
+      siSamplePayload: DEFAULT_SI_SAMPLE,
+      waybeoSamplePayload: DEFAULT_WAYBEO_SAMPLE,
+      siCustomerName: "LakmeSalon",  // Test customer name (same as Kia v2)
     },
   });
   console.log("Upserted Tata VoiceAgent:", tata.id, "(slug: tata, TEST)");
   console.log("  → Data: /data/tata/ (Gemini Live)");
+  console.log("  → SI Payload Template: Configured (matches Kia v2)");
 
   // Upsert Skoda VoiceAgent - TEST
   const skoda = await prisma.voiceAgent.upsert({
@@ -598,10 +605,17 @@ async function main() {
       isActive: true,
       isLive: false,  // Test VoiceAgent
       systemInstructions: SKODA_PROMPT,
+      // Payload templates - using same format as Kia v2 for testing
+      siPayloadTemplate: DEFAULT_SI_TEMPLATE,
+      waybeoPayloadTemplate: DEFAULT_WAYBEO_TEMPLATE,
+      siSamplePayload: DEFAULT_SI_SAMPLE,
+      waybeoSamplePayload: DEFAULT_WAYBEO_SAMPLE,
+      siCustomerName: "LakmeSalon",  // Test customer name (same as Kia v2)
     },
   });
   console.log("Upserted Skoda VoiceAgent:", skoda.id, "(slug: skoda, TEST)");
   console.log("  → Data: /data/skoda/ (Gemini Live)");
+  console.log("  → SI Payload Template: Configured (matches Kia v2)");
 
   // Add call flow for Kia v1 if it doesn't exist
   const existingCallFlowV1 = await prisma.callFlow.findUnique({
