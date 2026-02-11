@@ -571,6 +571,7 @@ async function main() {
     update: {
       systemInstructions: TATA_PROMPT,
       isLive: false,  // Test VoiceAgent
+      siCustomerName: "LakmeSalon",  // Test environment (same as Kia v2)
     },
     create: {
       name: "Tata VoiceAgent",
@@ -602,6 +603,7 @@ async function main() {
     update: {
       systemInstructions: SKODA_PROMPT,
       isLive: false,  // Test VoiceAgent
+      siCustomerName: "LakmeSalon",  // Test environment (same as Kia v2)
     },
     create: {
       name: "Skoda VoiceAgent",
