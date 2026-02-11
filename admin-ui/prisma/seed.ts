@@ -346,6 +346,16 @@ const DEFAULT_WAYBEO_TEMPLATE = {
   ],
 };
 
+// Default Waybeo sample payload - example of completed call
+const DEFAULT_WAYBEO_SAMPLE = {
+  callId: "tPKimrd0xi_xCo6elE1W7",
+  command: "data_record",
+  parameters: [
+    { key: "bot_reference_id", value: "bot_tPKimrd0xi_xCo6elE1W7" },
+    { key: "data_capture_status", value: "partial" },
+  ],
+};
+
 // Default SI payload template with dynamic placeholders
 // This is the ONLY format to be used for SI webhooks - matches Single Interface API spec exactly
 const DEFAULT_SI_TEMPLATE = {
