@@ -635,7 +635,7 @@ def _fetch_agent_config_from_api(agent: str) -> Optional[Dict[str, Any]]:
 
 def _fetch_prompt_from_api(agent: str) -> Optional[str]:
     """
-    Fetch system instructions from Admin UI API.
+    Fetch system instructions from Admin UI API and augment with knowledge pool.
     Returns None if API is unavailable or agent not found.
     """
     config = _fetch_agent_config_from_api(agent)
@@ -646,6 +646,26 @@ def _fetch_prompt_from_api(agent: str) -> Optional[str]:
             vmn_count = len(config.get("vmnMappings", {}))
             if vmn_count > 0:
                 print(f"[telephony] 📞 VMN mappings loaded: {vmn_count} entries")
+            
+            # Augment with knowledge pool if available
+            try:
+                from knowledge_pool import KnowledgePool
+                admin_url = cfg_instance.ADMIN_URL if cfg_instance else "http://localhost:3100"
+                knowledge = KnowledgePool(admin_url=admin_url, agent_slug=agent)
+                stats = knowledge.get_stats()
+                
+                if stats.get("total_corrections", 0) > 0:
+                    instructions = knowledge.augment_system_instructions(
+                        base_instructions=instructions,
+                        fields=["name", "model", "email", "test_drive"]
+                    )
+                    print(f"[telephony] 🧠 Knowledge pool augmented with {stats['total_corrections']} corrections")
+                else:
+                    print(f"[telephony] 💡 Knowledge pool empty - no corrections yet")
+            except Exception as e:
+                print(f"[telephony] ⚠️ Knowledge pool unavailable: {e}")
+                # Continue with base instructions if knowledge pool fails
+            
             return instructions
     return None
 

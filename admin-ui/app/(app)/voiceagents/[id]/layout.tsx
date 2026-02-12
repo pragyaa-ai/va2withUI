@@ -10,6 +10,7 @@ import { useSession } from "next-auth/react";
 const allTabs = [
   { segment: "", label: "Overview", roles: ["ADMIN", "USER"] },
   { segment: "/calls", label: "Calls", roles: ["ADMIN", "USER"] },
+  { segment: "/review", label: "Human Review", roles: ["ADMIN"] },
   { segment: "/instructions", label: "Configuration", roles: ["ADMIN"] },
   { segment: "/car-models", label: "Car Models", roles: ["ADMIN"] },
   { segment: "/callflow", label: "Call Flow", roles: ["ADMIN"] },

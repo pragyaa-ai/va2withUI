@@ -49,6 +49,14 @@ enum CallOutcome {
   TRANSFERRED   // Successfully transferred to agent
 }
 
+// Review status for data quality checks
+enum ReviewStatus {
+  PENDING       // Needs human review
+  IN_REVIEW     // Currently being reviewed
+  REVIEWED      // Human review completed
+  NO_ISSUES     // Auto-marked as good quality
+}
+
 // User roles for access control
 enum UserRole {
   ADMIN         // Full access to all tabs
@@ -99,6 +107,7 @@ model VoiceAgent {
   feedback      Feedback[]
   vmnMappings   VmnMapping[]
   carModels     CarModel[]
+  dataLabels    DataLabel[]       // Human-corrected labels for learning
 
   @@index([isActive])
   @@index([phoneNumber])
@@ -261,8 +270,14 @@ model CallSession {
   
   // Legacy meta field
   metaJson      Json?
+  
+  // Human review status for data quality checks
+  reviewStatus  ReviewStatus      @default(NO_ISSUES)
+  reviewedAt    DateTime?
+  reviewedBy    String?          // User ID or email who reviewed
 
   voiceAgent    VoiceAgent?       @relation(fields: [voiceAgentId], references: [id], onDelete: SetNull)
+  dataLabels    DataLabel[]      // Human-corrected labels for this call
 
   @@index([voiceAgentId])
   @@index([startedAt])
@@ -270,6 +285,7 @@ model CallSession {
   @@index([callId])
   @@index([outcome])
   @@index([sentiment])
+  @@index([reviewStatus])
 }
 
 // ---- NextAuth (Prisma Adapter compatible shape) ----
@@ -327,4 +343,47 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+// Human-labeled data corrections for improving VoiceAgent accuracy
+// This acts as a "knowledge pool" that can be referenced by the telephony service
+model DataLabel {
+  id                String      @id @default(cuid())
+  callSessionId     String      // Reference to the call where this data was extracted
+  voiceAgentId      String?     // Agent that handled the call (for agent-specific learning)
+  
+  // Field identification
+  fieldName         String      // e.g., "name", "model", "email", "test_drive"
+  fieldLabel        String?     // Human-readable label (e.g., "Customer Name", "Car Model")
+  
+  // Original extraction
+  originalValue     String?     // What the AI extracted
+  originalConfidence Decimal?   @db.Decimal(3, 2)  // Original confidence score if available
+  
+  // Human correction
+  correctedValue    String      // What it should have been
+  correctionReason  String?     // Why it was wrong (e.g., "misheard", "pronunciation issue")
+  
+  // Context from the call (to help AI learn)
+  audioSnippet      String?     @db.Text  // Transcript snippet where this was mentioned
+  userUtterance     String?     @db.Text  // Exact words the user said
+  
+  // Quality metrics
+  isCorrect         Boolean     @default(false)  // true = correction needed, false = original was good
+  attemptNumber     Int?        // Which attempt this was captured on (1, 2, 3+)
+  
+  // Metadata
+  labeledBy         String      // User ID or email who provided the label
+  labeledAt         DateTime    @default(now())
+  notes             String?     @db.Text  // Additional notes from reviewer
+  
+  // Relations
+  callSession       CallSession @relation(fields: [callSessionId], references: [id], onDelete: Cascade)
+  voiceAgent        VoiceAgent? @relation(fields: [voiceAgentId], references: [id], onDelete: SetNull)
+  
+  @@index([callSessionId])
+  @@index([voiceAgentId])
+  @@index([fieldName])
+  @@index([isCorrect])
+  @@index([labeledAt])
 }

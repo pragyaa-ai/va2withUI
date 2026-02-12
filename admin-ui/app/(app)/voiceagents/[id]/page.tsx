@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { VOICE_NAMES, ACCENTS, LANGUAGES, ENGINE_LABELS } from "@/lib/validation";
+import AttemptsAnalytics from "@/components/analytics/AttemptsAnalytics";
 import {
   AreaChart,
   Area,
@@ -647,6 +648,19 @@ export default function VoiceAgentOverviewPage() {
           </div>
         )}
       </Card>
+
+      {/* Data Capture Attempts Analytics */}
+      <div className="pt-8 border-t border-slate-200">
+        <h2 className="text-xl font-semibold text-slate-900 mb-4">Data Capture Attempts</h2>
+        <p className="text-sm text-slate-500 mb-6">
+          Track how many attempts are needed to capture each data point and identify areas for improvement
+        </p>
+        <AttemptsAnalytics
+          voiceAgentId={params.id as string}
+          startDate={period === "custom" ? customRange.start : undefined}
+          endDate={period === "custom" ? customRange.end : undefined}
+        />
+      </div>
 
     </div>
   );

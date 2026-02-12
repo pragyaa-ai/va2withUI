@@ -334,72 +334,151 @@ export default function CallDetailPage() {
         {activeTab === "extracted" && (
           <Card className="p-6">
             <h3 className="text-sm font-semibold text-slate-900 mb-4">Extracted Sales Data</h3>
-            {call.extractedData ? (
-              <div className="space-y-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="p-4 rounded-lg bg-slate-50 border border-slate-100">
-                    <div className="flex items-center justify-between mb-1">
-                      <p className="text-xs font-medium text-slate-500 uppercase">Customer Name</p>
-                      {getConfidenceBadge(call.extractedData.confidence_scores?.name_confidence)}
-                    </div>
-                    <p className="text-lg font-semibold text-slate-900">
-                      {call.extractedData.full_name || (
-                        <span className="text-slate-400 font-normal">Not captured</span>
+            {(() => {
+              // Get response_data from payloadJson for attempt tracking
+              const responseData = (call.payloadJson as any)?.response_data || [];
+              const getFieldData = (keyValue: string) => {
+                return responseData.find((item: any) => item.key_value === keyValue);
+              };
+
+              const getAttemptBadge = (attempts?: number) => {
+                if (!attempts || attempts === 1) {
+                  return <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">✓ 1st attempt</span>;
+                }
+                if (attempts === 2) {
+                  return <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full">⚠ 2nd attempt</span>;
+                }
+                return <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full">⚠ {attempts} attempts</span>;
+              };
+
+              const nameData = getFieldData("name");
+              const modelData = getFieldData("model");
+              const emailData = getFieldData("email");
+              const testDriveData = getFieldData("test_drive");
+
+              return call.extractedData ? (
+                <div className="space-y-4">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {/* Customer Name */}
+                    <div className="p-4 rounded-lg bg-slate-50 border border-slate-100">
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-xs font-medium text-slate-500 uppercase">Customer Name</p>
+                        <div className="flex items-center gap-2">
+                          {getConfidenceBadge(call.extractedData.confidence_scores?.name_confidence)}
+                          {nameData?.attempts && getAttemptBadge(nameData.attempts)}
+                        </div>
+                      </div>
+                      <p className="text-lg font-semibold text-slate-900">
+                        {call.extractedData.full_name || (
+                          <span className="text-slate-400 font-normal">Not captured</span>
+                        )}
+                      </p>
+                      {nameData?.remarks && (
+                        <p className="text-xs text-slate-500 mt-2 italic">
+                          {nameData.remarks}
+                        </p>
                       )}
-                    </p>
+                      {nameData?.attempts_details && (
+                        <p className="text-xs text-slate-600 mt-2 bg-white p-2 rounded border border-slate-200">
+                          <strong>History:</strong> {nameData.attempts_details}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Car Model */}
+                    <div className="p-4 rounded-lg bg-slate-50 border border-slate-100">
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-xs font-medium text-slate-500 uppercase">Car Model</p>
+                        <div className="flex items-center gap-2">
+                          {getConfidenceBadge(call.extractedData.confidence_scores?.car_confidence)}
+                          {modelData?.attempts && getAttemptBadge(modelData.attempts)}
+                        </div>
+                      </div>
+                      <p className="text-lg font-semibold text-slate-900">
+                        {call.extractedData.car_model || (
+                          <span className="text-slate-400 font-normal">Not captured</span>
+                        )}
+                      </p>
+                      {modelData?.remarks && (
+                        <p className="text-xs text-slate-500 mt-2 italic">
+                          {modelData.remarks}
+                        </p>
+                      )}
+                      {modelData?.attempts_details && (
+                        <p className="text-xs text-slate-600 mt-2 bg-white p-2 rounded border border-slate-200">
+                          <strong>History:</strong> {modelData.attempts_details}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Email ID */}
+                    <div className="p-4 rounded-lg bg-slate-50 border border-slate-100">
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-xs font-medium text-slate-500 uppercase">Email ID</p>
+                        <div className="flex items-center gap-2">
+                          {getConfidenceBadge(call.extractedData.confidence_scores?.email_confidence)}
+                          {emailData?.attempts && getAttemptBadge(emailData.attempts)}
+                        </div>
+                      </div>
+                      <p className="text-lg font-semibold text-slate-900">
+                        {call.extractedData.email_id || (
+                          <span className="text-slate-400 font-normal">Not captured</span>
+                        )}
+                      </p>
+                      {emailData?.remarks && (
+                        <p className="text-xs text-slate-500 mt-2 italic">
+                          {emailData.remarks}
+                        </p>
+                      )}
+                      {emailData?.attempts_details && (
+                        <p className="text-xs text-slate-600 mt-2 bg-white p-2 rounded border border-slate-200">
+                          <strong>History:</strong> {emailData.attempts_details}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Test Drive Interest */}
+                    <div className="p-4 rounded-lg bg-slate-50 border border-slate-100">
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-xs font-medium text-slate-500 uppercase">Test Drive Interest</p>
+                        <div className="flex items-center gap-2">
+                          {getConfidenceBadge(call.extractedData.confidence_scores?.test_drive_confidence)}
+                          {testDriveData?.attempts && getAttemptBadge(testDriveData.attempts)}
+                        </div>
+                      </div>
+                      <p className="text-lg font-semibold text-slate-900">
+                        {call.extractedData.test_drive_interest || (
+                          <span className="text-slate-400 font-normal">Not captured</span>
+                        )}
+                      </p>
+                      {testDriveData?.remarks && (
+                        <p className="text-xs text-slate-500 mt-2 italic">
+                          {testDriveData.remarks}
+                        </p>
+                      )}
+                      {testDriveData?.attempts_details && (
+                        <p className="text-xs text-slate-600 mt-2 bg-white p-2 rounded border border-slate-200">
+                          <strong>History:</strong> {testDriveData.attempts_details}
+                        </p>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="p-4 rounded-lg bg-slate-50 border border-slate-100">
-                    <div className="flex items-center justify-between mb-1">
-                      <p className="text-xs font-medium text-slate-500 uppercase">Car Model</p>
-                      {getConfidenceBadge(call.extractedData.confidence_scores?.car_confidence)}
+                  {call.extractedData.overall_status && (
+                    <div className="pt-4 border-t border-slate-200">
+                      <p className="text-sm text-slate-600">
+                        Overall Status:{" "}
+                        <span className="font-medium capitalize">{call.extractedData.overall_status}</span>
+                      </p>
                     </div>
-                    <p className="text-lg font-semibold text-slate-900">
-                      {call.extractedData.car_model || (
-                        <span className="text-slate-400 font-normal">Not captured</span>
-                      )}
-                    </p>
-                  </div>
-
-                  <div className="p-4 rounded-lg bg-slate-50 border border-slate-100">
-                    <div className="flex items-center justify-between mb-1">
-                      <p className="text-xs font-medium text-slate-500 uppercase">Email ID</p>
-                      {getConfidenceBadge(call.extractedData.confidence_scores?.email_confidence)}
-                    </div>
-                    <p className="text-lg font-semibold text-slate-900">
-                      {call.extractedData.email_id || (
-                        <span className="text-slate-400 font-normal">Not captured</span>
-                      )}
-                    </p>
-                  </div>
-
-                  <div className="p-4 rounded-lg bg-slate-50 border border-slate-100">
-                    <div className="flex items-center justify-between mb-1">
-                      <p className="text-xs font-medium text-slate-500 uppercase">Test Drive Interest</p>
-                      {getConfidenceBadge(call.extractedData.confidence_scores?.test_drive_confidence)}
-                    </div>
-                    <p className="text-lg font-semibold text-slate-900">
-                      {call.extractedData.test_drive_interest || (
-                        <span className="text-slate-400 font-normal">Not captured</span>
-                      )}
-                    </p>
-                  </div>
+                  )}
                 </div>
-
-                {call.extractedData.overall_status && (
-                  <div className="pt-4 border-t border-slate-200">
-                    <p className="text-sm text-slate-600">
-                      Overall Status:{" "}
-                      <span className="font-medium capitalize">{call.extractedData.overall_status}</span>
-                    </p>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <p className="text-slate-400 text-center py-8">
-                No extracted data available for this call.
-              </p>
-            )}
+              ) : (
+                <p className="text-slate-400 text-center py-8">
+                  No extracted data available for this call.
+                </p>
+              );
+            })()}
           </Card>
         )}
 

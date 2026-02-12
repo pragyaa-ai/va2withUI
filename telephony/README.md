@@ -201,10 +201,6 @@ journalctl -u voiceagent-telephony -f
 ### Audio Quality
 
 - Adjust buffer sizes: AUDIO_BUFFER_MS_INPUT, AUDIO_BUFFER_MS_OUTPUT
-- Lower values = lower latency, higher values = more stable
-
-### Gemini API Errors
-
-- Verify GCP project ID
+- Lower values = lower latency, higher values = more stable### Gemini API Errors- Verify GCP project ID
 - Check ADC credentials: gcloud auth application-default print-access-token
 - Ensure Vertex AI API is enabled## LicenseCopyright (c) Pragyaa.ai. All rights reserved.
