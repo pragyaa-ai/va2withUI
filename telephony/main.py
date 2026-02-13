@@ -1557,8 +1557,34 @@ async def handle_client(client_ws, path: str):
         if cfg.LOG_TRANSCRIPTS:
             print(f"[{session.ucid}] 🎙️ Greeting triggered")
 
+        # Maximum call duration safeguard (5 minutes = 300 seconds)
+        MAX_CALL_DURATION_SEC = 300
+
         # Process remaining messages
         async for raw in client_ws:
+            # Check if call has exceeded maximum duration (safeguard against stuck sessions)
+            elapsed = time.time() - session.call_start_time
+            if elapsed > MAX_CALL_DURATION_SEC and not session.call_ending:
+                print(f"[{session.ucid}] ⏱️ Call exceeded {MAX_CALL_DURATION_SEC}s limit ({int(elapsed)}s elapsed)")
+                print(f"[{session.ucid}] 🚨 Forcing call termination to prevent stuck session")
+                session.call_ending = True
+                
+                # Send hangup if not already sent
+                if not session.hangup_sent:
+                    session.hangup_sent = True
+                    asyncio.create_task(_send_hangup(
+                        session, 
+                        reason="max_duration_exceeded",
+                        cfg=cfg
+                    ))
+                
+                # Close Gemini connection
+                if session.gemini:
+                    asyncio.create_task(session.gemini.close())
+                
+                # Break to trigger cleanup
+                break
+
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
