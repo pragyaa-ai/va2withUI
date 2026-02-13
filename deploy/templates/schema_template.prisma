@@ -1,0 +1,462 @@
+// ============================================================================
+// VA2withUI Schema Template for Custom Deployments
+// ============================================================================
+// 
+// This template provides a starting point for Level 3 (Custom Schema) deployments.
+// 
+// INSTRUCTIONS:
+// 1. Keep the base models (User, Account, Session, VerificationToken, VoiceAgent)
+// 2. Customize or replace the domain-specific models (below the marker)
+// 3. Update enums to match your domain
+// 4. Add your custom models and relationships
+// 
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// BASE MODELS (REQUIRED - DO NOT REMOVE)
+// These models are essential for authentication and voice agent functionality
+// ============================================================================
+
+// NextAuth.js Models
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model User {
+  id            String    @id @default(cuid())
+  username      String    @unique
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  password      String // Hashed password
+  role          UserRole  @default(USER)
+  customerSlug  String // For multi-tenant branding (e.g., "rxone", "kia")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  voiceAgents   VoiceAgent[]
+
+  @@index([email])
+  @@index([username])
+  @@index([customerSlug])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+// ============================================================================
+// CORE VOICE AGENT MODEL (REQUIRED - CAN EXTEND)
+// This model is essential for voice agent functionality
+// You can add custom fields but do NOT remove existing fields
+// ============================================================================
+
+model VoiceAgent {
+  id          String            @id @default(cuid())
+  name        String // Display name (e.g., "Artemis Hospital", "Kia Delhi")
+  slug        String            @unique // URL-friendly identifier (e.g., "artemis", "kia-delhi")
+  phoneNumber String? // Optional phone number for this agent
+
+  // Engine configuration
+  engine   VoiceAgentEngine @default(PRIMARY)
+  isActive Boolean          @default(true)
+  isLive   Boolean          @default(false) // true = production, false = testing
+
+  // Voice settings
+  greeting  String   @default("Hello! Welcome. How can I help you today?")
+  accent    Accent   @default(INDIAN)
+  language  Language @default(HINDI)
+  voiceName VoiceName @default(ANANYA)
+
+  // AI instructions
+  systemInstructions String? @db.Text // Main prompt for the voice agent
+
+  // Webhook payload templates (JSON)
+  siPayloadTemplate     Json? // SingleInterface webhook payload template
+  waybeoPayloadTemplate Json? // Waybeo webhook payload template
+
+  // Webhook configuration
+  siCustomerName    String? // SingleInterface customer name
+  siEndpointUrl     String? // SingleInterface webhook URL
+  siAuthHeader      String? // SingleInterface auth header
+  waybeoEndpointUrl String? // Waybeo webhook URL
+  waybeoAuthHeader  String? // Waybeo auth header
+
+  // Sample payloads for testing
+  siSamplePayload     Json? // Sample SingleInterface payload
+  waybeoSamplePayload Json? // Sample Waybeo payload
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // ===== RELATIONSHIPS TO CUSTOM MODELS =====
+  // TODO: Add your custom relations here
+  // Example for e-commerce:
+  // products      Product[]
+  // inquiries     ProductInquiry[]
+  //
+  // Example for healthcare:
+  // doctors       DoctorProfile[]
+  // appointments  Appointment[]
+  //
+  // Example for real estate:
+  // properties    PropertyListing[]
+  // tours         PropertyTour[]
+
+  callFlows    CallFlow[]
+  sessions     CallSession[]
+  guardrails   Guardrail[]
+  voiceProfiles VoiceProfile[]
+  feedback     Feedback[]
+
+  // ===== DOMAIN-SPECIFIC RELATIONS (customize or remove) =====
+  // vmnMappings   VmnMapping[]
+  // domainModels  DomainModel[] // Replace with your entity name
+
+  @@index([isActive])
+  @@index([phoneNumber])
+  @@index([slug])
+}
+
+// Voice agent enums
+enum VoiceAgentEngine {
+  PRIMARY
+  SECONDARY
+}
+
+enum VoiceName {
+  ANANYA
+  SHIMMER
+  AOEDE
+  PUCK
+  CHARON
+  KORE
+  FENRIR
+}
+
+enum Accent {
+  INDIAN
+  AMERICAN
+  BRITISH
+  AUSTRALIAN
+}
+
+enum Language {
+  ENGLISH
+  HINDI
+  GUJARATI
+  MARATHI
+  TAMIL
+  TELUGU
+  KANNADA
+  MALAYALAM
+}
+
+// ============================================================================
+// CALL MANAGEMENT MODELS (REQUIRED - CAN EXTEND)
+// These models track call sessions and flows
+// ============================================================================
+
+model CallFlow {
+  id           String @id @default(cuid())
+  voiceAgentId String
+  flowName     String
+  description  String?        @db.Text
+  steps        CallFlowStep[]
+  isActive     Boolean        @default(true)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  voiceAgent VoiceAgent @relation(fields: [voiceAgentId], references: [id], onDelete: Cascade)
+
+  @@index([voiceAgentId])
+}
+
+model CallFlowStep {
+  id         String   @id @default(cuid())
+  callFlowId String
+  stepOrder  Int
+  stepType   String // e.g., "greeting", "question", "confirm", "end"
+  prompt     String   @db.Text
+  nextStepId String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  callFlow CallFlow @relation(fields: [callFlowId], references: [id], onDelete: Cascade)
+
+  @@index([callFlowId])
+}
+
+model Guardrail {
+  id           String   @id @default(cuid())
+  voiceAgentId String
+  ruleName     String
+  ruleType     String // e.g., "prohibited_topic", "required_disclosure"
+  description  String?  @db.Text
+  pattern      String? // Regex or keyword pattern
+  action       String // e.g., "block", "warn", "redirect"
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  voiceAgent VoiceAgent @relation(fields: [voiceAgentId], references: [id], onDelete: Cascade)
+
+  @@index([voiceAgentId])
+}
+
+model VoiceProfile {
+  id           String   @id @default(cuid())
+  voiceAgentId String
+  profileName  String
+  voiceSpeed   Float    @default(1.0)
+  voicePitch   Float    @default(1.0)
+  voiceVolume  Float    @default(1.0)
+  isDefault    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  voiceAgent VoiceAgent @relation(fields: [voiceAgentId], references: [id], onDelete: Cascade)
+
+  @@index([voiceAgentId])
+}
+
+model Feedback {
+  id           String   @id @default(cuid())
+  voiceAgentId String?
+  source       String   @default("testing") @db.VarChar(50)
+  message      String   @db.Text
+  createdAt    DateTime @default(now())
+
+  voiceAgent VoiceAgent? @relation(fields: [voiceAgentId], references: [id], onDelete: Cascade)
+
+  @@index([voiceAgentId])
+  @@index([source])
+}
+
+model CallSession {
+  id           String    @id @default(cuid())
+  voiceAgentId String?
+  callId       String? // External call ID from telephony provider
+  callerNumber String? // Phone number of caller
+  startTime    DateTime  @default(now())
+  endTime      DateTime?
+  duration     Int? // Duration in seconds
+  transcript   String?   @db.Text
+  recordingUrl String? // URL to call recording
+  status       CallStatus @default(IN_PROGRESS)
+
+  // Extracted data from call (JSON)
+  extractedData Json?
+
+  // Raw payloads from webhooks
+  siPayload     Json? // SingleInterface payload
+  waybeoPayload Json? // Waybeo payload
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  voiceAgent VoiceAgent? @relation(fields: [voiceAgentId], references: [id], onDelete: SetNull)
+
+  // ===== CUSTOM RELATIONS =====
+  // TODO: Add relations to your custom models
+  // Example:
+  // appointment  Appointment?
+  // inquiry      ProductInquiry?
+
+  @@index([voiceAgentId])
+  @@index([callId])
+  @@index([callerNumber])
+  @@index([startTime])
+}
+
+enum CallStatus {
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  ABANDONED
+}
+
+// ============================================================================
+// DOMAIN-SPECIFIC MODELS (CUSTOMIZE OR REPLACE)
+// These are example models. Replace with your own entities.
+// ============================================================================
+
+// ===== EXAMPLE 1: GENERIC CATALOG MODEL =====
+// This is a generic "item catalog" model. Rename and customize for your domain:
+// - Healthcare: DoctorProfile, ServiceCatalog
+// - E-commerce: Product, ProductCatalog
+// - Real Estate: PropertyListing
+// - Education: Course, Program
+// - Hospitality: RoomType, ServiceOffering
+
+// model DomainModel {
+//   id            String      @id @default(cuid())
+//   voiceAgentId  String
+//   itemName      String      // CUSTOMIZE: e.g., doctorName, productName, propertyName
+//   itemCode      String?     // CUSTOMIZE: e.g., sku, licenseNumber, mlsNumber
+//   category      String?     // CUSTOMIZE: e.g., specialization, category, propertyType
+//   description   String?     @db.Text
+//   features      String?     @db.Text
+//   displayOrder  Int         @default(0)
+//   isActive      Boolean     @default(true)
+//   createdAt     DateTime    @default(now())
+//   updatedAt     DateTime    @updatedAt
+//
+//   voiceAgent    VoiceAgent  @relation(fields: [voiceAgentId], references: [id], onDelete: Cascade)
+//
+//   @@unique([voiceAgentId, itemName])
+//   @@index([voiceAgentId])
+//   @@index([category])
+// }
+
+// ===== EXAMPLE 2: LOCATION/ROUTING MODEL =====
+// Maps phone numbers (VMN) to location codes, routing identifiers, etc.
+// Useful for multi-location businesses.
+
+// model PhoneRouting {
+//   id            String      @id @default(cuid())
+//   voiceAgentId  String
+//   phoneNumber   String      // Virtual mobile number or DID
+//   locationCode  String      // Store code, hospital code, branch code, etc.
+//   effectiveFrom DateTime    @default(now())
+//   createdAt     DateTime    @default(now())
+//   updatedAt     DateTime    @updatedAt
+//
+//   voiceAgent    VoiceAgent  @relation(fields: [voiceAgentId], references: [id], onDelete: Cascade)
+//
+//   @@unique([voiceAgentId, phoneNumber])
+//   @@index([phoneNumber])
+// }
+
+// ===== EXAMPLE 3: CUSTOMER DATA MODEL =====
+// Track customer inquiries, leads, or appointments
+
+// model CustomerInquiry {
+//   id            String      @id @default(cuid())
+//   voiceAgentId  String
+//   callSessionId String?
+//   customerName  String
+//   customerEmail String?
+//   customerPhone String
+//   inquiryType   String?     // Type of inquiry
+//   status        InquiryStatus @default(PENDING)
+//   notes         String?     @db.Text
+//   createdAt     DateTime    @default(now())
+//   updatedAt     DateTime    @updatedAt
+//
+//   voiceAgent    VoiceAgent   @relation(fields: [voiceAgentId], references: [id], onDelete: Cascade)
+//   callSession   CallSession? @relation(fields: [callSessionId], references: [id], onDelete: SetNull)
+//
+//   @@index([voiceAgentId])
+//   @@index([customerPhone])
+//   @@index([status])
+// }
+//
+// enum InquiryStatus {
+//   PENDING
+//   CONTACTED
+//   CONVERTED
+//   CANCELLED
+// }
+
+// ============================================================================
+// YOUR CUSTOM MODELS
+// Add your domain-specific models below
+// ============================================================================
+
+// TODO: Add your custom models here
+// 
+// Guidelines:
+// 1. Define clear relationships with VoiceAgent and/or CallSession
+// 2. Add appropriate indexes for query performance
+// 3. Use descriptive names that match your domain
+// 4. Include timestamps (createdAt, updatedAt) for auditing
+// 5. Add enums for status fields to enforce valid values
+//
+// Example for E-commerce:
+//
+// model Product {
+//   id            String   @id @default(cuid())
+//   voiceAgentId  String
+//   productName   String
+//   sku           String   @unique
+//   category      String
+//   price         Decimal  @db.Decimal(10, 2)
+//   stock         Int
+//   description   String?  @db.Text
+//   isActive      Boolean  @default(true)
+//   createdAt     DateTime @default(now())
+//   updatedAt     DateTime @updatedAt
+//
+//   voiceAgent    VoiceAgent @relation(fields: [voiceAgentId], references: [id], onDelete: Cascade)
+//   inquiries     ProductInquiry[]
+//
+//   @@index([voiceAgentId])
+//   @@index([category])
+//   @@index([sku])
+// }
+//
+// model ProductInquiry {
+//   id            String   @id @default(cuid())
+//   productId     String
+//   voiceAgentId  String
+//   callSessionId String?
+//   customerName  String
+//   customerPhone String
+//   quantity      Int      @default(1)
+//   status        InquiryStatus @default(PENDING)
+//   createdAt     DateTime @default(now())
+//
+//   product       Product     @relation(fields: [productId], references: [id])
+//   voiceAgent    VoiceAgent  @relation(fields: [voiceAgentId], references: [id])
+//   callSession   CallSession? @relation(fields: [callSessionId], references: [id])
+//
+//   @@index([productId])
+//   @@index([status])
+// }

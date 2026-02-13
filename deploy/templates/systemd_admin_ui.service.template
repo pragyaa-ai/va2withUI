@@ -1,0 +1,111 @@
+# ============================================================================
+# VA2withUI Admin UI Systemd Service Template
+# ============================================================================
+#
+# INSTRUCTIONS:
+# 1. Copy this file to /etc/systemd/system/${CUSTOMER_SLUG}-admin-ui.service
+# 2. Replace ${VARIABLE} placeholders with actual values
+# 3. Run: sudo systemctl daemon-reload
+# 4. Run: sudo systemctl enable ${CUSTOMER_SLUG}-admin-ui
+# 5. Run: sudo systemctl start ${CUSTOMER_SLUG}-admin-ui
+#
+# ============================================================================
+
+[Unit]
+Description=${CUSTOMER_NAME} Admin UI (Next.js)
+Documentation=https://github.com/pragyaa-ai/va2withUI
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=${DEPLOY_USER}
+Group=${DEPLOY_USER}
+
+# Working directory (absolute path to admin-ui folder)
+WorkingDirectory=${DEPLOY_PATH}/admin-ui
+
+# Environment variables
+Environment="NODE_ENV=production"
+Environment="PATH=/usr/bin:/usr/local/bin"
+
+# Start command - explicitly bind to port
+ExecStart=/usr/bin/npm start -- -p ${ADMIN_UI_PORT}
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=${CUSTOMER_SLUG}-admin-ui
+
+# Security settings (optional but recommended)
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Resource limits (optional)
+# LimitNOFILE=65536
+# LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target
+
+# ============================================================================
+# USAGE
+# ============================================================================
+#
+# Enable service:
+#   sudo systemctl enable ${CUSTOMER_SLUG}-admin-ui
+#
+# Start service:
+#   sudo systemctl start ${CUSTOMER_SLUG}-admin-ui
+#
+# Stop service:
+#   sudo systemctl stop ${CUSTOMER_SLUG}-admin-ui
+#
+# Restart service:
+#   sudo systemctl restart ${CUSTOMER_SLUG}-admin-ui
+#
+# Check status:
+#   sudo systemctl status ${CUSTOMER_SLUG}-admin-ui
+#
+# View logs:
+#   sudo journalctl -u ${CUSTOMER_SLUG}-admin-ui -f
+#
+# View recent errors:
+#   sudo journalctl -u ${CUSTOMER_SLUG}-admin-ui --since "10 minutes ago" | grep -i error
+#
+# ============================================================================
+# EXAMPLE VALUES
+# ============================================================================
+#
+# CUSTOMER_NAME="RxOne Healthcare"
+# CUSTOMER_SLUG="rxone"
+# DEPLOY_USER="info"
+# DEPLOY_PATH="/opt/rxone"
+# ADMIN_UI_PORT="3100"
+#
+# Example filled template:
+#
+# [Unit]
+# Description=RxOne Healthcare Admin UI (Next.js)
+# After=network.target postgresql.service
+#
+# [Service]
+# Type=simple
+# User=info
+# Group=info
+# WorkingDirectory=/opt/rxone/admin-ui
+# Environment="NODE_ENV=production"
+# ExecStart=/usr/bin/npm start -- -p 3100
+# Restart=always
+# RestartSec=10
+#
+# [Install]
+# WantedBy=multi-user.target
+#
+# ============================================================================

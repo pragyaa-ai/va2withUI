@@ -1,0 +1,113 @@
+# ============================================================================
+# VA2withUI Telephony Service Systemd Template
+# ============================================================================
+#
+# INSTRUCTIONS:
+# 1. Copy this file to /etc/systemd/system/${CUSTOMER_SLUG}-telephony.service
+# 2. Replace ${VARIABLE} placeholders with actual values
+# 3. Run: sudo systemctl daemon-reload
+# 4. Run: sudo systemctl enable ${CUSTOMER_SLUG}-telephony
+# 5. Run: sudo systemctl start ${CUSTOMER_SLUG}-telephony
+#
+# ============================================================================
+
+[Unit]
+Description=${CUSTOMER_NAME} Telephony Service (Python)
+Documentation=https://github.com/pragyaa-ai/va2withUI
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${DEPLOY_USER}
+Group=${DEPLOY_USER}
+
+# Working directory (absolute path to telephony folder)
+WorkingDirectory=${DEPLOY_PATH}/telephony
+
+# Environment variables
+Environment="PATH=${DEPLOY_PATH}/telephony/venv/bin:/usr/bin:/usr/local/bin"
+Environment="PYTHONUNBUFFERED=1"
+Environment="GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_CREDENTIALS_PATH}"
+
+# Start command - use venv Python interpreter
+ExecStart=${DEPLOY_PATH}/telephony/venv/bin/python main.py
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=${CUSTOMER_SLUG}-telephony
+
+# Security settings (optional but recommended)
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Resource limits (optional)
+# LimitNOFILE=65536
+# LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target
+
+# ============================================================================
+# USAGE
+# ============================================================================
+#
+# Enable service:
+#   sudo systemctl enable ${CUSTOMER_SLUG}-telephony
+#
+# Start service:
+#   sudo systemctl start ${CUSTOMER_SLUG}-telephony
+#
+# Stop service:
+#   sudo systemctl stop ${CUSTOMER_SLUG}-telephony
+#
+# Restart service:
+#   sudo systemctl restart ${CUSTOMER_SLUG}-telephony
+#
+# Check status:
+#   sudo systemctl status ${CUSTOMER_SLUG}-telephony
+#
+# View logs:
+#   sudo journalctl -u ${CUSTOMER_SLUG}-telephony -f
+#
+# View recent errors:
+#   sudo journalctl -u ${CUSTOMER_SLUG}-telephony --since "10 minutes ago" | grep -i error
+#
+# ============================================================================
+# EXAMPLE VALUES
+# ============================================================================
+#
+# CUSTOMER_NAME="RxOne Healthcare"
+# CUSTOMER_SLUG="rxone"
+# DEPLOY_USER="info"
+# DEPLOY_PATH="/opt/rxone"
+# GOOGLE_CREDENTIALS_PATH="/home/info/.config/gcloud/application_default_credentials.json"
+#
+# Example filled template:
+#
+# [Unit]
+# Description=RxOne Healthcare Telephony Service (Python)
+# After=network.target
+#
+# [Service]
+# Type=simple
+# User=info
+# Group=info
+# WorkingDirectory=/opt/rxone/telephony
+# Environment="PATH=/opt/rxone/telephony/venv/bin:/usr/bin"
+# Environment="GOOGLE_APPLICATION_CREDENTIALS=/home/info/.config/gcloud/application_default_credentials.json"
+# ExecStart=/opt/rxone/telephony/venv/bin/python main.py
+# Restart=always
+# RestartSec=10
+#
+# [Install]
+# WantedBy=multi-user.target
+#
+# ============================================================================

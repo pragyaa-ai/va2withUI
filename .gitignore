@@ -1,0 +1,65 @@
+# VA2withUI Deployment System - Git Ignore
+
+# Environment files (sensitive data)
+**/.env
+**/.env.local
+**/.env.production
+**/db_credentials*.txt
+
+# Node modules
+**/node_modules/
+**/.next/
+**/out/
+**/build/
+**/dist/
+
+# Python
+**/venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache/
+
+# Data directories
+/data/
+**/data/
+**/transcripts/
+**/recordings/
+
+# Backup files
+**/*.backup
+**/*.original
+**/*.bak
+**/*~
+
+# Logs
+**/*.log
+**/logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+.cursor/
+
+# Deployment artifacts
+/deploy/config/*.json
+/tmp/create_agents_*.sql
+/tmp/schema_mapping*.json
+
+# Database dumps
+**/*.sql
+!**/migrations/**/*.sql
+
+# Credentials
+**/credentials.json
+**/service-account*.json
+**/*_credentials*.txt

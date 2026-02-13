@@ -1,0 +1,116 @@
+# ============================================================================
+# VA2withUI Telephony Service Environment Configuration Template
+# ============================================================================
+#
+# INSTRUCTIONS:
+# 1. Copy this file to telephony/.env
+# 2. Replace ${VARIABLE} placeholders with actual values
+# 3. DO NOT commit .env files to git
+#
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Server Configuration
+# ----------------------------------------------------------------------------
+
+# Host address to bind to (0.0.0.0 for all interfaces, 127.0.0.1 for localhost only)
+HOST=0.0.0.0
+
+# Port for telephony WebSocket server
+PORT=${TELEPHONY_PORT}
+
+# WebSocket path for incoming calls
+WS_PATH=/ws
+
+# Exotel WebSocket path (if using Exotel)
+EXOTEL_WS_PATH=/exotel
+
+# ----------------------------------------------------------------------------
+# Google Cloud / Gemini Configuration
+# ----------------------------------------------------------------------------
+
+# Your GCP project ID with Gemini API access
+GCP_PROJECT_ID=${GCP_PROJECT_ID}
+
+# Gemini API location/region
+GEMINI_LOCATION=us-central1
+
+# Gemini model to use for voice conversations
+# Options:
+#   - gemini-live-2.5-flash-native-audio (recommended for voice)
+#   - gemini-2.0-flash-exp (experimental)
+GEMINI_MODEL=gemini-live-2.5-flash-native-audio
+
+# Voice to use for responses
+# Options: ANANYA, SHIMMER, AOEDE, PUCK, CHARON, KORE, FENRIR
+GEMINI_VOICE=${GEMINI_VOICE}
+
+# ----------------------------------------------------------------------------
+# Audio Configuration
+# ----------------------------------------------------------------------------
+
+# Telephony system sample rate (typically 8000 Hz for phone systems)
+TELEPHONY_SR=8000
+
+# Gemini input sample rate (16000 Hz recommended)
+GEMINI_INPUT_SR=16000
+
+# Gemini output sample rate (24000 Hz recommended)
+GEMINI_OUTPUT_SR=24000
+
+# Audio buffer size in milliseconds
+AUDIO_BUFFER_MS_INPUT=100
+AUDIO_BUFFER_MS_OUTPUT=100
+
+# ----------------------------------------------------------------------------
+# Data Storage Configuration
+# ----------------------------------------------------------------------------
+
+# Base directory for storing call data (transcripts, recordings, etc.)
+DATA_BASE_DIR=${DATA_DIR}
+
+# Enable/disable data storage
+ENABLE_DATA_STORAGE=true
+
+# ----------------------------------------------------------------------------
+# Admin UI Integration
+# ----------------------------------------------------------------------------
+
+# Admin UI API base URL for fetching voice agent configurations
+ADMIN_API_BASE=http://127.0.0.1:${ADMIN_UI_PORT}
+
+# ----------------------------------------------------------------------------
+# Optional: Logging Configuration
+# ----------------------------------------------------------------------------
+
+# Log level (DEBUG, INFO, WARNING, ERROR)
+# LOG_LEVEL=INFO
+
+# Log file path
+# LOG_FILE=/var/log/telephony/service.log
+
+# ----------------------------------------------------------------------------
+# Optional: Telephony Provider Configuration
+# ----------------------------------------------------------------------------
+
+# Twilio Configuration (if using Twilio)
+# TWILIO_ACCOUNT_SID=your_account_sid
+# TWILIO_AUTH_TOKEN=your_auth_token
+# TWILIO_PHONE_NUMBER=+1234567890
+
+# Exotel Configuration (if using Exotel)
+# EXOTEL_API_KEY=your_api_key
+# EXOTEL_API_TOKEN=your_api_token
+# EXOTEL_SID=your_sid
+
+# ----------------------------------------------------------------------------
+# EXAMPLE VALUES (Replace with actual values)
+# ----------------------------------------------------------------------------
+#
+# TELEPHONY_PORT=8081
+# GCP_PROJECT_ID=voiceagentprojects
+# GEMINI_VOICE=ANANYA
+# DATA_DIR=/data
+# ADMIN_UI_PORT=3100
+#
+# ============================================================================

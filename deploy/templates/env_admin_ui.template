@@ -1,0 +1,80 @@
+# ============================================================================
+# VA2withUI Admin UI Environment Configuration Template
+# ============================================================================
+#
+# INSTRUCTIONS:
+# 1. Copy this file to admin-ui/.env (for Prisma CLI)
+# 2. Copy this file to admin-ui/.env.local (for Next.js runtime)
+# 3. Replace ${VARIABLE} placeholders with actual values
+# 4. DO NOT commit .env or .env.local files to git
+#
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Database Configuration
+# ----------------------------------------------------------------------------
+
+# Main database connection string
+# Format: postgresql://USER:PASSWORD@HOST:PORT/DATABASE
+DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@127.0.0.1:5432/${DB_NAME}"
+
+# Shadow database for Prisma migrations
+# This is a temporary database used by Prisma to detect schema changes
+SHADOW_DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@127.0.0.1:5432/${SHADOW_DB_NAME}"
+
+# ----------------------------------------------------------------------------
+# NextAuth.js Configuration
+# ----------------------------------------------------------------------------
+
+# Public URL where the Admin UI is accessible
+# For local development: http://localhost:3100
+# For production: http://YOUR_EXTERNAL_IP:3100 or https://your-domain.com
+NEXTAUTH_URL="${ADMIN_UI_URL}"
+
+# Secret for encrypting JWT tokens and session data
+# Generate with: openssl rand -base64 32
+NEXTAUTH_SECRET="${NEXTAUTH_SECRET}"
+
+# ----------------------------------------------------------------------------
+# Customer Branding
+# ----------------------------------------------------------------------------
+
+# Customer name displayed in the UI
+NEXT_PUBLIC_CUSTOMER_NAME="${CUSTOMER_NAME}"
+
+# ----------------------------------------------------------------------------
+# Optional: External Service Configuration
+# ----------------------------------------------------------------------------
+
+# SingleInterface Webhook Configuration (if applicable)
+# SI_ENDPOINT_URL="https://api.singleinterface.com/webhook"
+# SI_AUTH_HEADER="Bearer YOUR_TOKEN"
+# SI_CUSTOMER_NAME="YourCustomerName"
+
+# Waybeo Webhook Configuration (if applicable)
+# WAYBEO_ENDPOINT_URL="https://api.waybeo.com/webhook"
+# WAYBEO_AUTH_HEADER="Bearer YOUR_TOKEN"
+
+# ----------------------------------------------------------------------------
+# Development/Debug Settings (Optional)
+# ----------------------------------------------------------------------------
+
+# Node environment (development, production, test)
+# NODE_ENV="production"
+
+# Enable debug logging
+# DEBUG="prisma:*"
+
+# ----------------------------------------------------------------------------
+# EXAMPLE VALUES (Replace with actual values)
+# ----------------------------------------------------------------------------
+#
+# DB_USER=voiceagent_user
+# DB_PASSWORD=SecurePassword123!
+# DB_NAME=rxone_db
+# SHADOW_DB_NAME=rxone_shadow
+# ADMIN_UI_URL=http://34.93.20.236:3100
+# NEXTAUTH_SECRET=gRpZ8vK3nQ7mJ2hF9xL1wD4bY6cT0eV5
+# CUSTOMER_NAME=RxOne Healthcare
+#
+# ============================================================================
