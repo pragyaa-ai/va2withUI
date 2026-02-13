@@ -49,6 +49,32 @@ export async function POST(
       },
     });
 
+    // Clear telephony cache to make new VMN mapping effective immediately
+    const voiceAgent = await prisma.voiceAgent.findUnique({
+      where: { id: params.id },
+      select: { slug: true },
+    });
+    
+    if (voiceAgent) {
+      const telephonyAdminUrl = process.env.TELEPHONY_ADMIN_URL || "http://localhost:8082";
+      try {
+        const cacheResponse = await fetch(`${telephonyAdminUrl}/cache/clear`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ agent: voiceAgent.slug }),
+        });
+        
+        if (cacheResponse.ok) {
+          console.log(`[POST vmn-mappings] ✅ Telephony cache cleared for agent: ${voiceAgent.slug}`);
+        } else {
+          console.warn(`[POST vmn-mappings] ⚠️ Failed to clear telephony cache: HTTP ${cacheResponse.status}`);
+        }
+      } catch (cacheError) {
+        // Non-fatal: Log warning but don't fail the update
+        console.warn(`[POST vmn-mappings] ⚠️ Telephony cache clear error:`, cacheError);
+      }
+    }
+
     return NextResponse.json(mapping, { status: 201 });
   } catch (err: unknown) {
     // Handle unique constraint violation (duplicate VMN for this agent)

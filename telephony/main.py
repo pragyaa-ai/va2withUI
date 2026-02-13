@@ -40,6 +40,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, parse_qs
 
 import aiohttp
+import aiohttp.web
 import websockets
 from websockets.exceptions import ConnectionClosed
 
@@ -601,6 +602,35 @@ ADMIN_API_BASE = os.getenv("ADMIN_API_BASE", "http://127.0.0.1:3100")
 
 # Module-level cache for agent config (includes VMN mappings, prompt, webhook endpoints)
 _agent_config_cache: Dict[str, Dict[str, Any]] = {}
+
+
+def clear_agent_cache(agent: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Clear cached agent configuration to force reload from Admin UI.
+    
+    Args:
+        agent: Specific agent slug to clear (e.g., "spotlight"), or None to clear all
+    
+    Returns:
+        Dict with status and count of cleared entries
+    """
+    global _agent_config_cache
+    
+    if agent:
+        agent_lower = agent.lower()
+        if agent_lower in _agent_config_cache:
+            del _agent_config_cache[agent_lower]
+            print(f"[telephony] 🔄 Cache cleared for agent: {agent}")
+            return {"status": "success", "agent": agent, "cleared": 1}
+        else:
+            print(f"[telephony] ℹ️ No cached config found for agent: {agent}")
+            return {"status": "not_found", "agent": agent, "cleared": 0}
+    else:
+        # Clear entire cache
+        count = len(_agent_config_cache)
+        _agent_config_cache.clear()
+        print(f"[telephony] 🔄 Cache cleared for all agents ({count} entries)")
+        return {"status": "success", "cleared": count}
 
 
 def _fetch_agent_config_from_api(agent: str) -> Optional[Dict[str, Any]]:
@@ -1974,10 +2004,59 @@ async def _save_call_data(session: TelephonySession, cfg: Config) -> None:
         print(f"[{session.ucid}] ❌ Error saving call data: {e}")
 
 
+async def handle_cache_clear(request):
+    """HTTP endpoint to clear agent config cache."""
+    try:
+        data = await request.json() if request.can_read_body else {}
+        agent = data.get("agent")  # Optional: specific agent slug
+        
+        result = clear_agent_cache(agent)
+        
+        return aiohttp.web.json_response({
+            "success": True,
+            "message": f"Cache cleared successfully",
+            **result
+        })
+    except Exception as e:
+        print(f"[telephony] ❌ Cache clear error: {e}")
+        return aiohttp.web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+
+async def handle_cache_status(request):
+    """HTTP endpoint to check cache status."""
+    cached_agents = list(_agent_config_cache.keys())
+    return aiohttp.web.json_response({
+        "cached_agents": cached_agents,
+        "count": len(cached_agents)
+    })
+
+
+async def start_admin_http_server(port: int = 8082):
+    """Start HTTP server for admin operations (cache management)."""
+    app = aiohttp.web.Application()
+    app.router.add_post('/cache/clear', handle_cache_clear)
+    app.router.add_get('/cache/status', handle_cache_status)
+    
+    runner = aiohttp.web.AppRunner(app)
+    await runner.setup()
+    site = aiohttp.web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"✅ Admin HTTP server listening on http://0.0.0.0:{port}")
+    print(f"   - POST /cache/clear - Clear agent config cache")
+    print(f"   - GET  /cache/status - View cached agents")
+
+
 async def main() -> None:
     cfg = Config()
     Config.validate(cfg)
     cfg.print_config()
+
+    # Start admin HTTP server for cache management (non-blocking)
+    admin_port = int(os.getenv("ADMIN_HTTP_PORT", "8082"))
+    asyncio.create_task(start_admin_http_server(admin_port))
 
     # websockets.serve passes (websocket, path) for the legacy API; handler accepts both.
     async with websockets.serve(handle_client, cfg.HOST, cfg.PORT):

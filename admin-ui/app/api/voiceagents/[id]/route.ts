@@ -47,6 +47,26 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // DEBUG: Log Prisma result
     console.log(`[PATCH] Prisma result - siSamplePayload: ${voiceAgent.siSamplePayload ? 'EXISTS' : 'NULL'}, waybeoSamplePayload: ${voiceAgent.waybeoSamplePayload ? 'EXISTS' : 'NULL'}`);
     
+    // Clear telephony cache for this agent to make changes take effect immediately
+    const telephonyAdminUrl = process.env.TELEPHONY_ADMIN_URL || "http://localhost:8082";
+    try {
+      const cacheResponse = await fetch(`${telephonyAdminUrl}/cache/clear`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent: voiceAgent.slug }),
+      });
+      
+      if (cacheResponse.ok) {
+        const cacheResult = await cacheResponse.json();
+        console.log(`[PATCH] ✅ Telephony cache cleared for agent: ${voiceAgent.slug} (${cacheResult.cleared} entries)`);
+      } else {
+        console.warn(`[PATCH] ⚠️ Failed to clear telephony cache: HTTP ${cacheResponse.status}`);
+      }
+    } catch (cacheError) {
+      // Non-fatal: Log warning but don't fail the update
+      console.warn(`[PATCH] ⚠️ Telephony cache clear error:`, cacheError);
+    }
+    
     const siValidation = validatePayloadTemplate(data.siPayloadTemplate);
     const waybeoValidation = validatePayloadTemplate(data.waybeoPayloadTemplate);
     return NextResponse.json({

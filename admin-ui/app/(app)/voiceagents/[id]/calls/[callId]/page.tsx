@@ -338,11 +338,14 @@ export default function CallDetailPage() {
               // Get response_data from payloadJson for attempt tracking
               const responseData = (call.payloadJson as any)?.response_data || [];
               const getFieldData = (keyValue: string) => {
-                return responseData.find((item: any) => item.key_value === keyValue);
+                const data = responseData.find((item: any) => item.key_value === keyValue);
+                // Return null if not found, or return with default values for older calls
+                return data || null;
               };
 
-              const getAttemptBadge = (attempts?: number) => {
-                if (!attempts || attempts === 1) {
+              const getAttemptBadge = (attempts?: number | null) => {
+                // Handle null/undefined or missing attempts (older calls)
+                if (!attempts || attempts <= 1) {
                   return <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">✓ 1st attempt</span>;
                 }
                 if (attempts === 2) {
@@ -365,7 +368,7 @@ export default function CallDetailPage() {
                         <p className="text-xs font-medium text-slate-500 uppercase">Customer Name</p>
                         <div className="flex items-center gap-2">
                           {getConfidenceBadge(call.extractedData.confidence_scores?.name_confidence)}
-                          {nameData?.attempts && getAttemptBadge(nameData.attempts)}
+                          {getAttemptBadge(nameData?.attempts)}
                         </div>
                       </div>
                       <p className="text-lg font-semibold text-slate-900">
@@ -380,7 +383,7 @@ export default function CallDetailPage() {
                       )}
                       {nameData?.attempts_details && (
                         <p className="text-xs text-slate-600 mt-2 bg-white p-2 rounded border border-slate-200">
-                          <strong>History:</strong> {nameData.attempts_details}
+                          <strong>History:</strong> {typeof nameData.attempts_details === 'string' ? nameData.attempts_details : JSON.stringify(nameData.attempts_details)}
                         </p>
                       )}
                     </div>
@@ -391,7 +394,7 @@ export default function CallDetailPage() {
                         <p className="text-xs font-medium text-slate-500 uppercase">Car Model</p>
                         <div className="flex items-center gap-2">
                           {getConfidenceBadge(call.extractedData.confidence_scores?.car_confidence)}
-                          {modelData?.attempts && getAttemptBadge(modelData.attempts)}
+                          {getAttemptBadge(modelData?.attempts)}
                         </div>
                       </div>
                       <p className="text-lg font-semibold text-slate-900">
@@ -406,7 +409,7 @@ export default function CallDetailPage() {
                       )}
                       {modelData?.attempts_details && (
                         <p className="text-xs text-slate-600 mt-2 bg-white p-2 rounded border border-slate-200">
-                          <strong>History:</strong> {modelData.attempts_details}
+                          <strong>History:</strong> {typeof modelData.attempts_details === 'string' ? modelData.attempts_details : JSON.stringify(modelData.attempts_details)}
                         </p>
                       )}
                     </div>
@@ -417,7 +420,7 @@ export default function CallDetailPage() {
                         <p className="text-xs font-medium text-slate-500 uppercase">Email ID</p>
                         <div className="flex items-center gap-2">
                           {getConfidenceBadge(call.extractedData.confidence_scores?.email_confidence)}
-                          {emailData?.attempts && getAttemptBadge(emailData.attempts)}
+                          {getAttemptBadge(emailData?.attempts)}
                         </div>
                       </div>
                       <p className="text-lg font-semibold text-slate-900">
@@ -432,7 +435,7 @@ export default function CallDetailPage() {
                       )}
                       {emailData?.attempts_details && (
                         <p className="text-xs text-slate-600 mt-2 bg-white p-2 rounded border border-slate-200">
-                          <strong>History:</strong> {emailData.attempts_details}
+                          <strong>History:</strong> {typeof emailData.attempts_details === 'string' ? emailData.attempts_details : JSON.stringify(emailData.attempts_details)}
                         </p>
                       )}
                     </div>
@@ -443,7 +446,7 @@ export default function CallDetailPage() {
                         <p className="text-xs font-medium text-slate-500 uppercase">Test Drive Interest</p>
                         <div className="flex items-center gap-2">
                           {getConfidenceBadge(call.extractedData.confidence_scores?.test_drive_confidence)}
-                          {testDriveData?.attempts && getAttemptBadge(testDriveData.attempts)}
+                          {getAttemptBadge(testDriveData?.attempts)}
                         </div>
                       </div>
                       <p className="text-lg font-semibold text-slate-900">
@@ -458,7 +461,7 @@ export default function CallDetailPage() {
                       )}
                       {testDriveData?.attempts_details && (
                         <p className="text-xs text-slate-600 mt-2 bg-white p-2 rounded border border-slate-200">
-                          <strong>History:</strong> {testDriveData.attempts_details}
+                          <strong>History:</strong> {typeof testDriveData.attempts_details === 'string' ? testDriveData.attempts_details : JSON.stringify(testDriveData.attempts_details)}
                         </p>
                       )}
                     </div>
