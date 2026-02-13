@@ -310,6 +310,17 @@ export async function POST(request: NextRequest) {
       console.log(`[Ingest] ${payload.call_ref_id}: Using pre-generated summary from telephony service`);
     }
 
+    // Safeguard: Cap maximum duration at 5 minutes (300 seconds)
+    // Calls longer than this are likely stuck sessions
+    const MAX_DURATION_SEC = 300; // 5 minutes
+    const cappedDuration = payload.duration && payload.duration > MAX_DURATION_SEC 
+      ? MAX_DURATION_SEC 
+      : payload.duration;
+    
+    if (payload.duration && payload.duration > MAX_DURATION_SEC) {
+      console.warn(`[Ingest] ${payload.call_ref_id}: Duration ${payload.duration}s exceeds max ${MAX_DURATION_SEC}s, capping to ${MAX_DURATION_SEC}s`);
+    }
+
     // Upsert the call session (update if exists, create if not)
     const callSession = await prisma.callSession.upsert({
       where: {
@@ -320,8 +331,8 @@ export async function POST(request: NextRequest) {
         fromNumber: payload.customer_number?.toString() || null,
         startedAt,
         endedAt,
-        durationSec: payload.duration || null,
-        minutesBilled: payload.duration ? new Prisma.Decimal(Math.ceil(payload.duration / 60)) : null,
+        durationSec: cappedDuration || null,
+        minutesBilled: cappedDuration ? new Prisma.Decimal(Math.ceil(cappedDuration / 60)) : null,
         outcome: mapCompletionStatus(payload.completion_status),
         extractedData: extractedData as Prisma.InputJsonValue,
         payloadJson: cleanSIPayload as unknown as Prisma.InputJsonValue,
@@ -342,8 +353,8 @@ export async function POST(request: NextRequest) {
         fromNumber: payload.customer_number?.toString() || null,
         startedAt,
         endedAt,
-        durationSec: payload.duration || null,
-        minutesBilled: payload.duration ? new Prisma.Decimal(Math.ceil(payload.duration / 60)) : null,
+        durationSec: cappedDuration || null,
+        minutesBilled: cappedDuration ? new Prisma.Decimal(Math.ceil(cappedDuration / 60)) : null,
         outcome: mapCompletionStatus(payload.completion_status),
         extractedData: extractedData as Prisma.InputJsonValue,
         payloadJson: cleanSIPayload as unknown as Prisma.InputJsonValue,
